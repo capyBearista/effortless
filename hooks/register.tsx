@@ -5114,7 +5114,7 @@ Saved to ${out}.md and .json` }
                 $.ui.invalidate('ui.render')
               }} />,
             ...(tested && tested.ok !== null
-              ? [<Text key="settings-judge-result" color={tested.ok ? '#7fd49b' : '#ff8a80'}>{`${tested.ok ? '✓' : '✗'} ${tested.text}`}</Text>]
+              ? [<Text key="settings-judge-result" color={tested.ok ? '#7fd49b' : '#ff8a80'} wrap="truncate">{`${tested.ok ? '✓' : '✗'} ${tested.text}`}</Text>]
               : []),
 ]) : card === 'model' ? (bare ? [] : MODEL_CHOICES.map(c => (
             <Box key={`model-${c.value}`} flexDirection="column" flexGrow={1} flexShrink={1} minWidth={26}>
