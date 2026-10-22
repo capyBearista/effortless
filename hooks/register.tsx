@@ -196,7 +196,7 @@ const CARDS: readonly { id: SettingsCard; title: string; about: string }[] = [
   { id: 'judge', title: 'Judge', about: 'Haiku judges prompts and handoffs. Add decision models for quicker effort calls. Test checks they answer.' },
 ]
 /** Fork: the Judge part's own sub-part, opened from it and not on the overview: the decision models, in order. */
-const MODELS_PART = { id: 'models', title: 'Models', about: 'Asked in order until one answers; Haiku judges when none does. ‹ moves one earlier.' } as const
+const MODELS_PART = { id: 'models', title: 'Models', about: 'Asked in order until one answers; Haiku judges when none does. ↑ moves one earlier.' } as const
 /** A part's name and what it does, sub-parts included. */
 const partOf = (card: SettingsCard) => (card === 'models' ? MODELS_PART : CARDS.find(c => c.id === card))
 // The Model card: the two ways to run. Effort follows the judge in both.
@@ -269,7 +269,9 @@ let DASH_EDGE = '#2a2a2f'
 /** The settings title's word in the website hero's style: crisp, going soft and grainy at its bottom right (a radial
  * mask fades the crisp copy out there and a copy through the site's #grainy filter takes over). The app gives the image
  * the band's font. */
-const SETTINGS_TITLE = `<svg xmlns="http://www.w3.org/2000/svg" width="92" height="28" viewBox="0 0 92 28"><defs><radialGradient id="c" cx="1" cy="1" r=".75" gradientTransform="matrix(.7 0 0 2.3 .3 -1.3)"><stop offset=".35" stop-color="#000"/><stop offset="1" stop-color="#fff"/></radialGradient><radialGradient id="s" cx=".9" cy=".85" r=".55" gradientTransform="matrix(.7 0 0 2.3 .27 -1.1)"><stop offset=".4" stop-color="#fff"/><stop offset="1" stop-color="#000"/></radialGradient><mask id="mc"><rect width="92" height="28" fill="url(#c)"/></mask><mask id="ms"><rect width="92" height="28" fill="url(#s)"/></mask><filter id="g" x="-20%" y="-40%" width="140%" height="180%"><feTurbulence type="fractalNoise" baseFrequency="1.4" numOctaves="1" seed="7" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="2.5" xChannelSelector="R" yChannelSelector="G" result="moved"/><feGaussianBlur in="moved" stdDeviation="0.35" result="soft"/><feComponentTransfer in="noise" result="dots"><feFuncA type="discrete" tableValues="0 1 1 1 1"/></feComponentTransfer><feComposite in="soft" in2="dots" operator="in"/></filter></defs><g font-size="21" font-weight="600" letter-spacing="-.5"><text x="1" y="20" fill="#ffffff" mask="url(#mc)">effortless</text><g mask="url(#ms)"><text x="1" y="20" fill="#ffffff" filter="url(#g)">effortless</text></g></g></svg>`
+// The word is held to the image's width (textLength): an image draws in its own fallback font, wider than the app's,
+// and "effortless" was cut to "effortles".
+const SETTINGS_TITLE = `<svg xmlns="http://www.w3.org/2000/svg" width="92" height="28" viewBox="0 0 92 28"><defs><radialGradient id="c" cx="1" cy="1" r=".75" gradientTransform="matrix(.7 0 0 2.3 .3 -1.3)"><stop offset=".35" stop-color="#000"/><stop offset="1" stop-color="#fff"/></radialGradient><radialGradient id="s" cx=".9" cy=".85" r=".55" gradientTransform="matrix(.7 0 0 2.3 .27 -1.1)"><stop offset=".4" stop-color="#fff"/><stop offset="1" stop-color="#000"/></radialGradient><mask id="mc"><rect width="92" height="28" fill="url(#c)"/></mask><mask id="ms"><rect width="92" height="28" fill="url(#s)"/></mask><filter id="g" x="-20%" y="-40%" width="140%" height="180%"><feTurbulence type="fractalNoise" baseFrequency="1.4" numOctaves="1" seed="7" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="2.5" xChannelSelector="R" yChannelSelector="G" result="moved"/><feGaussianBlur in="moved" stdDeviation="0.35" result="soft"/><feComponentTransfer in="noise" result="dots"><feFuncA type="discrete" tableValues="0 1 1 1 1"/></feComponentTransfer><feComposite in="soft" in2="dots" operator="in"/></filter></defs><g font-size="21" font-weight="600" letter-spacing="-.5"><text x="1" y="20" textLength="89" lengthAdjust="spacingAndGlyphs" fill="#ffffff" mask="url(#mc)">effortless</text><g mask="url(#ms)"><text x="1" y="20" textLength="89" lengthAdjust="spacingAndGlyphs" fill="#ffffff" filter="url(#g)">effortless</text></g></g></svg>`
 /** The mark as the settings bar shows it: big, tilted and faint, cut off by the bar. */
 const SETTINGS_MARK = MARK_SVG.replace('<g mask=', '<g opacity=".2" transform="rotate(9 50 50)" mask=')
 // The dashboard's mark (see dash-mark): its size, and its look with Auto off.
@@ -4990,8 +4992,9 @@ Saved to ${out}.md and .json` }
           {/* The top bar: barely a shade lighter than the band, holding the title, Save and the cross. */}
           {!term ? (
             <Box key="settings-bar" position="absolute" top={-1} left={0} right={0} height={3.5} overflow="hidden" backgroundColor={DASH_HEAD}>
-              {/* The mark, big, tilted and cut off by the bar's edges, behind the title and the buttons. */}
-              <Box key="settings-bar-mark" position="absolute" top={-2} right={20} marginTop={1}>
+              {/* The mark, big, tilted and cut off by the bar's edges, in the gap between the title and the buttons: behind
+                  "Check for updates" it made the button hard to read. */}
+              <Box key="settings-bar-mark" position="absolute" top={-2} right={48} marginTop={1}>
                 <Svg source={SETTINGS_MARK} alt="effortless mark" width={140} height={140} />
               </Box>
               {/* A hairline along the bar's bottom: a one-pixel image stretched across (a Box cannot draw one pixel). */}
@@ -5135,18 +5138,27 @@ Saved to ${out}.md and .json` }
                   </Box>,
                 ]),
 ] : card === 'models' ? (bare ? [] : [
-            // One chip per model in the order tried: its provider's mark, its place and name, ‹ to try it earlier, ✕.
-            ...chain.map((r, i) => {
-              const mark = providerMark(r)
-              return (
-                <Box key={`model-chip-${r.id}`} flexDirection="row" gap={1} alignItems="center" flexShrink={0}>
-                  {Svg && !term ? <Svg source={mark.source} alt={mark.alt} width={mark.width} height={mark.height} /> : null}
-                  <Text color={DASH_TEXT}>{`${i + 1} ${routeLabel(r)}`}</Text>
-                  {i > 0 ? <Button key={`model-earlier-${r.id}`} plain dimColor label="‹" onPress={() => set('decisionModels')(movedEarlier(shown.decisionModels, r.id))} /> : null}
-                  <Button key={`model-remove-${r.id}`} plain dimColor label="✕" onPress={() => set('decisionModels')(withoutRoute(shown.decisionModels, r.id))} />
-                </Box>
-              )
-            }),
+            // The models in the order tried, two to a row so eight still fit the band's height: its provider's mark, its
+            // place and id (cut short if it must be), then ↑ to try it earlier and ✕. Read across, then down.
+            ...(chain.length ? [
+              <Box key="model-list" width="100%" flexDirection="row" flexWrap="wrap">
+                {chain.map((r, i) => {
+                  const mark = providerMark(r)
+                  return (
+                    <Box key={`model-chip-${r.id}`} width="50%" flexDirection="row" gap={1} alignItems="center" paddingRight={2}>
+                      {Svg && !term ? <Box flexShrink={0}><Svg source={mark.source} alt={mark.alt} width={mark.width} height={mark.height} /></Box> : null}
+                      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                        <Text color={DASH_TEXT} wrap="truncate">{`${i + 1} ${routeLabel(r)}`}</Text>
+                      </Box>
+                      {i > 0 ? <Button key={`model-earlier-${r.id}`} plain dimColor label="↑" onPress={() => set('decisionModels')(movedEarlier(shown.decisionModels, r.id))} /> : null}
+                      <Button key={`model-remove-${r.id}`} plain dimColor label="✕" onPress={() => set('decisionModels')(withoutRoute(shown.decisionModels, r.id))} />
+                    </Box>
+                  )
+                })}
+              </Box>,
+            ] : []),
+            // Adding and the time limits on the row under the list.
+            <Box key="model-controls-break" width="100%" height={0} />,
             ...(chain.length < MAX_ROUTES
               ? [pick({ key: 'settings-model-add', label: 'Add', value: '-', options: [
                     // The terminal draws a short list as buttons, where a placeholder would be one more button.
@@ -5176,10 +5188,21 @@ Saved to ${out}.md and .json` }
             ...(shown.judge !== 'haiku'
               ? [
                   // The models in the order tried, Haiku last; their own part edits them.
+                  // The chain's text gives way, never the button ("Add models ›" was cut off).
                   <Box key="settings-chain" flexDirection="row" gap={1} alignItems="center" flexShrink={1} minWidth={0}>
-                    <Text dimColor wrap="truncate">{chain.length ? `${chain.map(routeLabel).join(' → ')} → Haiku` : 'No decision models'}</Text>
-                    <Button key="settings-models-open" variant="secondary" label={chain.length ? 'Models ›' : 'Add models ›'} onPress={openCard('models')} />
+                    <Box flexShrink={1} minWidth={0}>
+                      <Text dimColor wrap="truncate">{chain.length ? `${chain.map(routeLabel).join(' → ')} → Haiku` : 'No decision models'}</Text>
+                    </Box>
+                    <Box flexShrink={0}>
+                      <Button key="settings-models-open" variant="secondary" label={chain.length ? 'Models ›' : 'Add models ›'} onPress={openCard('models')} />
+                    </Box>
                   </Box>,
+                ]
+              : []),
+            // The keys, Test and what it found on a row of their own, under the judge and its models.
+            <Box key="judge-test-break" width="100%" height={0} />,
+            ...(shown.judge !== 'haiku'
+              ? [
                   ...(needsOpenRouter
                     ? [field('or-key-field', <Input key="settings-or-key" placeholder={hasOrKey ? 'OpenRouter key saved. Paste to replace' : 'Paste OpenRouter key'}
                         value={draft.openrouterKey ?? ''} submitLabel="ok" onInput={set('openrouterKey')} onSubmit={set('openrouterKey')} />, 34)]

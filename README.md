@@ -98,7 +98,7 @@ new version in the chat you pressed it in, with nothing to type.
 | **Compact** | compacts the chat. It turns into a glowing **Handoff** when Haiku says a fresh chat would pay off, with Compact as quiet text beside it. Set Settings → Handoff → Handoff button to **Always** to keep Handoff on the bar |
 | **⚙** | settings |
 
-Prefer it quiet? Settings → Customize has a **Minimal** look with no bar. It also sets the **Appearance** (match Claude Code, dark or light) and the **Theme** (violet, Claude orange or cherry blossom).
+Prefer it quiet? Settings → Customize has a **Minimal** look with no bar. It also sets the **Appearance** (match, dark or light: in the desktop app, Match follows the app's own light or dark; in the terminal, Claude Code's theme) and the **Theme** (violet, Claude orange or cherry blossom).
 
 ### When a chat gets heavy
 
