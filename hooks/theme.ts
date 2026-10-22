@@ -303,12 +303,10 @@ const inked = (els: Record<string, unknown>): Record<string, unknown> => {
   }
   const Button = els.Button as Component | undefined
   const Box = els.Box as Component | undefined
-  // The app's own controls (a boxed Button, a Select, an Input) draw a see-through fill and the app's ink: on a panel of
+  // The app's own controls (a boxed Button, a Select) draw a see-through fill and the app's ink: on a panel of
   // the other lightness they vanish. Laid on the app's own surface ('inverseText' as a background), they read as they do
   // in the app.
-  // A field fills the room its own box gives it, so its backing does too; a button or a select keeps its width.
-  const backed = (control: unknown, fills = false) =>
-    Box ? Box({ backgroundColor: 'inverseText', ...(fills ? { flexGrow: 1, flexShrink: 1, minWidth: 0 } : { flexShrink: 0 }), children: [control] }) : control
+  const backed = (control: unknown) => (Box ? Box({ backgroundColor: 'inverseText', flexShrink: 0, children: [control] }) : control)
   if (Button) {
     // A plain Button draws its label in the app's ink too, whatever colour a Text inside it asks for (checked in the
     // rig), so it is backed like the rest. A blank one, laid over a drawing to take its click, stays bare: a backing
@@ -319,10 +317,10 @@ const inked = (els: Record<string, unknown>): Record<string, unknown> => {
       return blank ? Button(props) : backed(Button(props))
     }
   }
-  for (const part of ['Select', 'Input']) {
-    const Control = els[part] as Component | undefined
-    if (Control) out[part] = (props: Record<string, unknown>) => backed(Control(props), part === 'Input')
-  }
+  // A field is left bare: the compact and handoff bars show theirs through a clipping window sized to the field, and a
+  // backing box there pushed the field out of it. Its own fill keeps it visible; Match app is the fix for its ink.
+  const Select = els.Select as Component | undefined
+  if (Select) out.Select = (props: Record<string, unknown>) => backed(Select(props))
   return out
 }
 
