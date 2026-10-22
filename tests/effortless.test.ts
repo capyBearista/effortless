@@ -434,7 +434,8 @@ describe('typed commands', () => {
 })
 
 describe('footer text', () => {
-  const PURPLE = '#a79cf7'
+  // The footer sits on the app's own surface, so it is drawn in the app's theme keys (the violet is 'merged').
+  const PURPLE = 'merged'
   const auto = async ($: Engine) => String((await $.command.run({ command: 'effortless', args: 'auto' })).text)
   const saving = (on: On, outputTokens: number) =>
     on('turn.step', async function* (_$, e) {
@@ -461,11 +462,11 @@ describe('footer text', () => {
     expect(text).toContain('"label":" ⏻ "')
     // No frame of its own (it drew wide and cut off): plain, with the same grey box as the level on hover.
     expect(text).toContain('"plain":true')
-    expect(text).toContain('"hover":{"scope":"power","backgroundColor":"#2b2b2f"}')
+    expect(text).toContain('"hover":{"scope":"power"}')
     expect(text).not.toContain('"variant":"primary"')
     expect(text).not.toContain('borderStyle')
     // Hovering the level puts a grey box behind it.
-    expect(text).toContain('"hover":{"scope":"effort","backgroundColor":"#2b2b2f"}')
+    expect(text).toContain('"hover":{"scope":"effort"}')
     // No background at rest: the only ones are in the hover styles and the hidden hover cards (display none).
     expect(text.replaceAll('"backgroundColor":"#2b2b2f"}', '').replaceAll('"backgroundColor":"#221c3a"', '')).not.toContain('backgroundColor')
     await footer.unmount()
@@ -806,11 +807,11 @@ describe('cache countdown', () => {
     expect(await drawn(footer)).not.toContain('"color":"#e')
     await mocked.advance(10 * 60_000)
     expect(await drawn(footer)).toContain(shows('19m'))
-    expect(await drawn(footer)).toContain('"color":"#e0a33a"')
+    expect(await drawn(footer)).toContain('"color":"warning"')
     await mocked.advance(16 * 60_000)
     const late = await drawn(footer)
     expect(late).toContain(shows('3m'))
-    expect(late).toContain('"color":"#e5534b"')
+    expect(late).toContain('"color":"error"')
 
     await mocked.advance(5 * 60_000)
     expect(await drawn(footer)).toContain(shows('❄ Cold'))
@@ -1358,7 +1359,7 @@ describe('setup guide', () => {
     expect(await band.find({ key: 'setup-back' })).toBeUndefined()
     await clickable(band, 'setup-actions')
     // Branded: the name in the footer's purple, the step counter beside it.
-    expect(await drawn(band)).toContain('"color":"#a79cf7"')
+    expect(await drawn(band)).toContain('"color":"merged"')
     expect(await drawn(band)).toContain('✦ effortless setup  1/4')
     expect(await drawn(band)).toContain('Just Haiku (no key)')
     // The right side: a still SVG (every click redraws the band, and a redrawn animation flickers) with the gradient.
@@ -1376,7 +1377,7 @@ describe('setup guide', () => {
     expect(await drawn(band)).toContain('Balanced: ')
     await band.press({ key: 'setup-bias4' })
     expect(await drawn(band)).toContain('Smartest: ')
-    expect(await drawn(band)).toContain('{"color":"#a79cf7"},"children":["──"]')
+    expect(await drawn(band)).toContain('{"color":"merged"},"children":["──"]')
     await band.press({ key: 'setup-next' })
 
     // 3/4 the handoff: the installed skills to pick from.
@@ -1388,7 +1389,7 @@ describe('setup guide', () => {
     // 4/4 the look: match Claude Code, dark or light. Light is picked here.
     expect(await drawn(band)).toContain('4/4')
     expect(await drawn(band)).toContain('Dark or light panels?')
-    expect(await drawn(band)).toContain('◉ Match Claude Code')
+    expect(await drawn(band)).toContain('◉ Match app')
     await band.press({ key: 'setup-look-light' })
     expect(await drawn(band)).toContain('◉ Light')
     await band.press({ key: 'setup-next' })
@@ -2283,13 +2284,13 @@ describe('swamp band and setup entry', () => {
     await start($, on)
     await $.command.run({ command: 'effortless', args: 'save' })
     const footer = await $.ui.mount(FOOTER)
-    expect(await drawn(footer)).toContain('"color":"#f08a3c"')
+    expect(await drawn(footer)).toContain('"color":"claude"')
     await $.command.run({ command: 'effortless', args: 'save' })
     await footer.unmount()
     const again = await $.ui.mount(FOOTER)
     const text = await drawn(again)
-    expect(text).not.toContain('"color":"#f08a3c"')
-    expect(text).toContain('"color":"#a79cf7"')
+    expect(text).not.toContain('"color":"claude"')
+    expect(text).toContain('"color":"merged"')
     await again.unmount()
   })
 
@@ -2889,28 +2890,39 @@ describe('dashboard', () => {
     await band.unmount()
   })
 
-  test("auto appearance follows Claude Code's own theme row: light turns it pale, dark turns it back", { options: { layout: 'default' } } as never, async ($, on) => {
+  test("auto appearance on the desktop follows the app, not Claude Code's theme row: theme keys and the app's surface either way", { options: { layout: 'default' } } as never, async ($, on) => {
     engine(on)
     const mocked = mock.clock(on)
     let claudeTheme = 'light'
     on('config.list', () => ({ value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: claudeTheme, provider: { kind: 'engine' }, isLocked: false }] }) as never)
     await start($, on)
     await closeSetup($, DESK_BAND)
-    // The first draw reads the row; the redraw it asks for is pale.
-    let band = await $.ui.mount(DESK_BAND)
-    await band.unmount()
-    await mocked.advance(100)
-    band = await $.ui.mount(DESK_BAND)
-    expect(await drawn(band)).toContain(lightHex('#141416', 'surface'))
-    await band.unmount()
-    // Claude Code goes dark: within a few seconds the panels follow.
-    claudeTheme = 'dark'
-    await mocked.advance(5000)
-    band = await $.ui.mount(DESK_BAND)
-    await band.unmount()
-    await mocked.advance(100)
-    band = await $.ui.mount(DESK_BAND)
-    expect(await drawn(band)).toContain('"backgroundColor":"#141416"')
+    for (const row of ['light', 'dark']) {
+      claudeTheme = row
+      await mocked.advance(5000)
+      let band = await $.ui.mount(DESK_BAND)
+      await band.unmount()
+      await mocked.advance(100)
+      band = await $.ui.mount(DESK_BAND)
+      const tree = await drawn(band)
+      expect(tree).toContain('"backgroundColor":"inverseText"')
+      expect(tree).not.toContain('"backgroundColor":"#141416"')
+      expect(tree).not.toContain(`"backgroundColor":"${lightHex('#141416', 'surface')}"`)
+      // The drawings carry their light form for the app to pick.
+      expect(tree).toContain('prefers-color-scheme: light')
+      await band.unmount()
+    }
+  })
+
+  test('Dark set on the desktop: the dark palette, with the app\'s controls on the app\'s own surface', { options: { layout: 'default', appearance: 'dark' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    const band = await $.ui.mount(DESK_BAND)
+    const tree = await drawn(band)
+    expect(tree).toContain('"backgroundColor":"#141416"')
+    expect(tree).not.toContain('prefers-color-scheme: light')
     await band.unmount()
   })
 
@@ -4211,7 +4223,7 @@ describe('decision models in the settings and the guide (fork)', () => {
     const panel = await openPanel($)
     expect(await drawn(panel)).toContain('Haiku + 1 model')
     await panel.press({ key: 'settings-card-judge' })
-    expect(await drawn(panel)).toContain('Zen Jev (free) → Haiku')
+    expect(await drawn(panel)).toContain('jev-1.13-free → Haiku')
     // Zen needs no key: no key field until an OpenRouter model is listed.
     expect(await panel.find({ key: 'settings-or-key' })).toBeUndefined()
     expect(await panel.find({ key: 'settings-key' })).toBeUndefined()
@@ -4219,16 +4231,16 @@ describe('decision models in the settings and the guide (fork)', () => {
     expect(await drawn(panel)).toContain('Judge ›')
     expect(await drawn(panel)).toContain('OpenCode')
     await panel.select({ key: 'settings-model-add', value: MERCURY })
-    expect(await drawn(panel)).toContain('2 Mercury (free)')
+    expect(await drawn(panel)).toContain('2 inception/mercury-decide:free')
     expect(await drawn(panel)).toContain('OpenRouter')
     await panel.press({ key: `model-earlier-${MERCURY}` })
-    expect(await drawn(panel)).toContain('1 Mercury (free)')
+    expect(await drawn(panel)).toContain('1 inception/mercury-decide:free')
     await panel.press({ key: `model-remove-${ZEN}` })
     expect(await panel.find({ key: `model-chip-${ZEN}` })).toBeUndefined()
     await panel.select({ key: 'settings-model-each', value: '3000' })
     // Back goes to the Judge part, which now asks for the OpenRouter key.
     await panel.press({ key: 'settings-back' })
-    expect(await drawn(panel)).toContain('Mercury (free) → Haiku')
+    expect(await drawn(panel)).toContain('inception/mercury-decide:free → Haiku')
     expect(await panel.find({ key: 'settings-or-key' })).toBeDefined()
     expect(set).toEqual([])
     await panel.press({ key: 'settings-save' })
@@ -4252,7 +4264,7 @@ describe('decision models in the settings and the guide (fork)', () => {
     await panel.input({ key: 'settings-model-other', text: 'openrouter/acme/decider' })
     expect(await drawn(panel)).not.toContain('Not a model id')
     expect(await panel.find({ key: 'settings-model-other' })).toBeUndefined()
-    expect(await drawn(panel)).toContain('2 OpenRouter acme/decider')
+    expect(await drawn(panel)).toContain('2 acme/decider')
     await panel.unmount()
   })
 
@@ -4294,8 +4306,8 @@ describe('decision models in the settings and the guide (fork)', () => {
     await panel.press({ key: 'settings-card-judge' })
     await panel.press({ key: 'settings-judge-test' })
     const text = await drawn(panel)
-    expect(text).toContain('Zen Jev (free) answered: low')
-    expect(text).toContain('OpenRouter x/nope: failed (404)')
+    expect(text).toContain('jev-1.13-free answered: low')
+    expect(text).toContain('x/nope: failed (404)')
     await panel.unmount()
   })
 
@@ -4352,8 +4364,9 @@ describe('decision models in the settings and the guide (fork)', () => {
     expect(withoutRoute(`${ZEN}, ${MERCURY}`, ZEN)).toBe(MERCURY)
     expect(movedEarlier(`${ZEN}, ${MERCURY}`, MERCURY)).toBe(`${MERCURY}, ${ZEN}`)
     expect(movedEarlier(`${ZEN}, ${MERCURY}`, ZEN)).toBe(`${ZEN}, ${MERCURY}`)
-    expect(routeLabel(parseDecisionModels(MERCURY)[0])).toBe('Mercury (free)')
-    expect(routeLabel(parseDecisionModels('openrouter/acme/decider')[0])).toBe('OpenRouter acme/decider')
+    expect(routeLabel(parseDecisionModels(MERCURY)[0])).toBe('inception/mercury-decide:free')
+    expect(routeLabel(parseDecisionModels('openrouter/acme/decider')[0])).toBe('acme/decider')
+    expect(routeLabel(parseDecisionModels('opencode/jev-1.13-free')[0])).toBe('jev-1.13-free')
     expect(withEnvLine('A=1\nOPENROUTER_API_KEY=old\n', 'OPENROUTER_API_KEY', 'n$&w')).toBe('A=1\nOPENROUTER_API_KEY=n$&w\n')
     expect(withEnvLine('A=1', 'OPENROUTER_API_KEY', 'k')).toBe('A=1\nOPENROUTER_API_KEY=k\n')
   })

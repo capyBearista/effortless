@@ -123,17 +123,112 @@ export function lightHex(hex: string, role: 'text' | 'surface' | 'art' = 'art'):
 }
 const lightRe = /#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?(?![0-9a-fA-F])/g
 
+/** Every hex in a string (an SVG, a style) in the current theme's hue, still drawn for a dark app. */
+function tintHue(text: string): string {
+  if (current === 'violet') return text
+  const turned = text.replace(hexRe, tintHex)
+  // Petals only where the art was violet and has turned pink: the green, yellow, blue and red cards keep their sparkles.
+  return current === 'rose' && turned !== text ? petals(turned) : turned
+}
+
 /** Every hex in a string (an SVG, a style) in the current theme. */
 export function tint(text: string): string {
   if (current === 'violet' && !light) return text
-  const turned = current === 'violet' ? text : text.replace(hexRe, tintHex)
-  // Petals only where the art was violet and has turned pink: the green, yellow, blue and red cards keep their sparkles.
-  const drawn = current === 'rose' && turned !== text ? petals(turned) : turned
+  const drawn = tintHue(text)
   if (!light) return drawn
   // A shape marked data-keep (a switch's knob) keeps its colour: it sits on a colour of its own, not on the panel.
   return drawn.replace(/(<[^>]*>)|([^<]+)/g, (part: string, tag?: string) =>
     tag && tag.includes('data-keep') ? part : part.replace(lightRe, hex => lightHex(hex)))
 }
+
+// Match app: on a surface that draws images (the desktop, the editor, the phone) the mod cannot ask whether the app is
+// light or dark, but the app answers for it in two places. Its theme keys ('text', 'claude', 'success', ...) are drawn
+// in the app's own light or dark, and an Svg's `@media (prefers-color-scheme: light)` follows the app too (both checked
+// with a probe in Desktop, CLI 2.1.308). So every colour is drawn as one of those: hex text becomes the theme key of its
+// kind, a painted surface becomes the app's own ('inverseText' as a background is the app's black or white), and each
+// drawing carries its light form in a media query. The terminal has neither, and keeps Claude Code's theme row.
+let matchApp = false
+export const setMatchApp = (on: boolean) => {
+  matchApp = on
+}
+
+const svgMemo = new Map<string, string>()
+const SVG_MEMO_MAX = 300
+const PAINT_ATTR = /\b(fill|stroke|stop-color|flood-color|lighting-color)="(#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?)"/g
+/** A drawing in the theme's hue for a dark app, with its light form in a media query, so it follows the app. */
+export function matchAppSvg(source: string): string {
+  const memoKey = `${current}\u0000${source}`
+  const hit = svgMemo.get(memoKey)
+  if (hit !== undefined) return hit
+  const dark = tintHue(source)
+  // The light form as rules: an attribute selector per colour (CSS beats a presentation attribute), and each <style>
+  // again with its colours turned, later in the sheet so it wins. A data-keep shape keeps its colour, as in tint.
+  const rules = new Set<string>()
+  for (const [, attr, hex] of dark.matchAll(PAINT_ATTR)) {
+    const turned = lightHex(hex!)
+    if (turned !== hex) rules.add(`[${attr}="${hex}"]:not([data-keep]){${attr}:${turned}}`)
+  }
+  for (const [, css] of dark.matchAll(/<style>([\s\S]*?)<\/style>/g)) {
+    const turned = css!.replace(lightRe, hex => lightHex(hex))
+    if (turned !== css) rules.add(turned)
+  }
+  const end = dark.lastIndexOf('</svg>')
+  const out = rules.size === 0 || end === -1
+    ? dark
+    : `${dark.slice(0, end)}<style>@media (prefers-color-scheme: light){${[...rules].join('')}}</style>${dark.slice(end)}`
+  if (svgMemo.size >= SVG_MEMO_MAX) svgMemo.delete(svgMemo.keys().next().value!)
+  svgMemo.set(memoKey, out)
+  return out
+}
+
+/**
+ * One hex as the app's theme key of its kind, for Match app. Text: the light greys are 'text', the dim ones 'inactive',
+ * and a colour goes to the key of its hue (Claude orange is 'claude', violet 'merged', green 'success'). Pink has no key,
+ * so it is kept at a middle lightness that reads on black and on white. A border: grey is 'subtle', a hover's 'inactive'.
+ */
+export function matchAppColor(hex: string, role: 'text' | 'border' | 'hover-border'): string {
+  const n = parseInt(hex.slice(1, 7), 16)
+  const [h, s, l, chroma] = toHsl((n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255)
+  if (chroma < 0.08 || s < 0.15) {
+    if (role === 'border') return 'subtle'
+    if (role === 'hover-border') return 'inactive'
+    return l >= 0.62 ? 'text' : 'inactive'
+  }
+  if (h >= 345 || h < 8) return 'error'
+  if (h < 32) return 'claude'
+  if (h < 70) return 'warning'
+  if (h < 170) return 'success'
+  // From 235 it is the brand violet's family (tintHex's own bound).
+  if (h < 235) return 'suggestion'
+  if (h < 300) return 'merged'
+  return fromHsl(h, Math.min(s, 0.7), 0.55)
+}
+const isHex = (v: unknown): v is string => typeof v === 'string' && /^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/.test(v)
+// Nearly see-through (the hover's '#00000000'): left as it is, it paints nothing in either.
+const isClear = (hex: string) => hex.length === 9 && parseInt(hex.slice(7), 16) < 0x80
+const BORDERS = ['borderColor', 'borderTopColor', 'borderBottomColor', 'borderLeftColor', 'borderRightColor']
+/** A props object with its colours as the app's theme keys (matchAppColor), its hover's too. */
+export function matchAppProps(props: Record<string, unknown>, hover = false): Record<string, unknown> {
+  let out = props
+  const color = tintOrSelf(props.color)
+  if (isHex(color)) out = { ...out, color: matchAppColor(color, 'text') }
+  const bg = props.backgroundColor
+  // A painted surface is the app's own; a hover's fill is left out, the app draws its own hover on a control.
+  // The engine refuses a prop set to undefined, so a dropped one is taken out.
+  if (isHex(bg) && !isClear(bg)) {
+    if (hover) {
+      const { backgroundColor: _drop, ...rest } = out
+      out = rest
+    } else out = { ...out, backgroundColor: 'inverseText' }
+  }
+  for (const k of BORDERS) {
+    const edge = tintOrSelf(props[k])
+    if (isHex(edge)) out = { ...out, [k]: matchAppColor(edge, hover ? 'hover-border' : 'border') }
+  }
+  if (props.hover && typeof props.hover === 'object') out = { ...out, hover: matchAppProps(props.hover as Record<string, unknown>, true) }
+  return out
+}
+const tintOrSelf = (v: unknown) => (isHex(v) ? tintHex(v) : v)
 
 /** The accent as text colour. */
 export const accent = () => tintHex(VIOLET)
@@ -178,10 +273,81 @@ const lit = (Part: unknown): unknown => {
   return wrap
 }
 
-/** The parts `$.ui.resolve` hands over, with the Svg in the theme and, in a light app, the Box, Text and Button turned light. Absent stays absent. */
-export function themedEls<T extends object>(els: T): T {
+// Dark or Light set on a surface whose app may be the other: text with no colour of its own takes the app's ink, which
+// on the mod's own panel can be dark on dark. Every such Text gets the panel's ink instead, and the app's controls sit
+// on the app's own surface.
+const INK = '#d4d4d8'
+const INK_DIM = '#8b8b93'
+const withInk = (props: Record<string, unknown>, color: string) => {
+  const { dimColor: _dim, ...rest } = props
+  return { ...rest, color }
+}
+const inked = (els: Record<string, unknown>): Record<string, unknown> => {
+  const out: Record<string, unknown> = {}
+  const Text = els.Text as Component | undefined
+  // The dark-app ink: on Light the Text it goes to is already turned light (lit), which turns it with the rest.
+  const ink = (dim: boolean) => (dim ? INK_DIM : INK)
+  if (Text) {
+    out.Text = (props: Record<string, unknown>) =>
+      Text(props && typeof props === 'object' && props.color === undefined ? withInk(props, ink(props.dimColor === true)) : props)
+  }
+  const Button = els.Button as Component | undefined
+  const Box = els.Box as Component | undefined
+  // The app's own controls (a boxed Button, a Select, an Input) draw a see-through fill and the app's ink: on a panel of
+  // the other lightness they vanish. Laid on the app's own surface ('inverseText' as a background), they read as they do
+  // in the app.
+  // A field fills the room its own box gives it, so its backing does too; a button or a select keeps its width.
+  const backed = (control: unknown, fills = false) =>
+    Box ? Box({ backgroundColor: 'inverseText', ...(fills ? { flexGrow: 1, flexShrink: 1, minWidth: 0 } : { flexShrink: 0 }), children: [control] }) : control
+  if (Button) {
+    // A plain Button draws its label in the app's ink too, whatever colour a Text inside it asks for (checked in the
+    // rig), so it is backed like the rest. A blank one, laid over a drawing to take its click, stays bare: a backing
+    // would paint over the drawing.
+    out.Button = (props: Record<string, unknown>) => {
+      const kids = props?.children
+      const blank = (typeof props?.label !== 'string' || !props.label.trim()) && !(Array.isArray(kids) ? kids.length : kids)
+      return blank ? Button(props) : backed(Button(props))
+    }
+  }
+  for (const part of ['Select', 'Input']) {
+    const Control = els[part] as Component | undefined
+    if (Control) out[part] = (props: Record<string, unknown>) => backed(Control(props), part === 'Input')
+  }
+  return out
+}
+
+const matchAppWrapped = new WeakMap<object, Component>()
+const matched = (Part: unknown): unknown => {
+  if (typeof Part !== 'function') return Part
+  let wrap = matchAppWrapped.get(Part as object)
+  if (!wrap) {
+    const inner = Part as unknown as Component
+    wrap = props => inner(props && typeof props === 'object' ? matchAppProps(props) : props)
+    matchAppWrapped.set(Part as object, wrap)
+  }
+  return wrap
+}
+
+/**
+ * The parts `$.ui.resolve` hands over, in the theme. Where they draw images (not the terminal): with Match app, or for
+ * what sits on the app's own surface (`onApp`, the footer), every colour follows the app (matchAppProps, matchAppSvg); with Dark or Light set, the Svg is in the theme, Box, Text and
+ * Button are turned light on Light, and text gets the panel's ink so it reads whatever the app is. The terminal: the
+ * theme, turned light when Claude Code's theme is. Absent stays absent.
+ */
+export function themedEls<T extends object>(els: T, opts: { onApp?: boolean } = {}): T {
   const out: Record<string, unknown> = { ...els }
-  if ('Svg' in els) out.Svg = themedSvg((els as { Svg: unknown }).Svg)
+  const drawsImages = 'Svg' in els
+  if (drawsImages && (matchApp || opts.onApp)) {
+    const Svg = (els as { Svg: unknown }).Svg
+    if (typeof Svg === 'function') {
+      const inner = Svg as Component
+      out.Svg = (props: Record<string, unknown>) => inner(typeof props?.source === 'string' ? { ...props, source: matchAppSvg(props.source) } : props)
+    }
+    for (const part of ['Box', 'Text', 'Button']) if (part in els) out[part] = matched((els as Record<string, unknown>)[part])
+    return out as T
+  }
+  if (drawsImages) out.Svg = themedSvg((els as { Svg: unknown }).Svg)
   if (light) for (const part of ['Box', 'Text', 'Button']) if (part in els) out[part] = lit((els as Record<string, unknown>)[part])
+  if (drawsImages) Object.assign(out, inked(out))
   return out as T
 }

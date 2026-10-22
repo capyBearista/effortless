@@ -47,7 +47,8 @@ const params = {
   press: (opt('press', '') || '').split(',').filter(Boolean),
   command: opt('command', '') || '',
   trace: Number(opt('trace', '0')),
-  options: Object.fromEntries((opt('options', '') || '').split(',').filter(Boolean).map((kv) => kv.split('='))),
+  // k=v pairs split on commas; a value that needs one writes it %2C (decisionModels=a%2Cb).
+  options: Object.fromEntries((opt('options', '') || '').split(',').filter(Boolean).map((kv) => kv.split('=')).map(([k, v]) => [k, decodeURIComponent(v ?? '')])),
 }
 const width = Number(opt('width', '768')) // CSS px of the band slot (the composer column; 768 at a wide window)
 const zoom = opt('zoom', 'app') === 'app' ? appZoom() : Number(opt('zoom'))
@@ -100,6 +101,8 @@ const windowImport = importsOf.find((i) => /^function \w+\(e\)\{return e\?\(\w+\
 const elementImport = importsOf.find((i) => /^function \w+\(e\)\{return e\?\.nodeType===1\?e:null\}/.test(definitionOf(i.file, i.name)))
 if (!tokensImport || !windowImport || !elementImport)
   fail(`renderer imports changed: tokens ${!!tokensImport}, ownerWindow ${!!windowImport}, asElement ${!!elementImport}`)
+// Set by rendererNames: how this app build's element renderer takes its arguments.
+let buildTreeShape = 'positional'
 const names = rendererNames(rendererSource)
 
 // --- 1. The tree, from the real mod -------------------------------------------------------------------------------------
@@ -120,6 +123,7 @@ const rig = {
   windowImport: keyOf(windowImport),
   elementImport: keyOf(elementImport),
   names,
+  buildTreeShape,
   hit: (opt('hit', '') || '').split(',').filter(Boolean),
   used: [],
   trace,
@@ -230,23 +234,39 @@ function rendererNames(src) {
     names[role] = [...hits][0]
   }
   // The AbovePrompt site hands the band's tree shaper and surface CSS to the shared site component as named props.
+  // Since app 3.6556 the site takes it from a local (`r=e.shapeTree??$y; ... shapeTree:r`) just before the props.
   find('shapeTree', "the band's tree shaper (the AbovePrompt site's default shapeTree)",
-    `component:"AbovePrompt"[^}]*?shapeTree:(?:${id}\\.shapeTree\\?\\?)?(${id})`)
+    new RegExp(`${id}=${id}\\.shapeTree\\?\\?${id};return[^;]{0,300}component:"AbovePrompt"`).test(src)
+      ? `${id}=${id}\\.shapeTree\\?\\?(${id});return[^;]{0,300}component:"AbovePrompt"`
+      : `component:"AbovePrompt"[^}]*?shapeTree:(?:${id}\\.shapeTree\\?\\?)?(${id})`)
   find('surfaceCss', "the band's surface CSS (the AbovePrompt site's surfaceCss, which sets --engine-band-line)",
     `component:"AbovePrompt"[^}]*?surfaceCss:(${id})`)
   // Opens the host's shadow root once and puts the engine CSS plus the site's CSS in a <style> as its first child.
   find('attachRoot', 'the shadow-root setup (if (host.shadowRoot) return it; else attachShadow and add the engine CSS)',
     `function (${id})\\((${id}),${id}\\)\\{if\\(\\2\\.shadowRoot\\)return \\2\\.shadowRoot;let ${id}=\\2\\.attachShadow\\(`)
-  // A fresh collector for what one draw leaves behind: the image leaves, the hover rules, the groups.
-  find('newMarks', 'the marks collector (() => ({leaves: [], hoverRules: [], ...}))', `(${id})=\\(\\)=>\\(\\{leaves:\\[\\],hoverRules:\\[\\]`)
-  // The element renderer takes the marks collector's result as a default parameter, after the colour resolver.
-  find('buildTree', 'the element renderer (tree, handlers, colorOf = ..., marks = newMarks(), ...)',
-    `function (${id})\\(${id},${id},${id}=${id},${id}=${esc(names.newMarks)}\\(\\)`)
-  find('colorOf', "the colour resolver (the element renderer's default colorOf)",
-    `function ${esc(names.buildTree)}\\(${id},${id},${id}=(${id}),`)
-  // Where the shared site draws, the ink (the host's computed colour and font) comes from a helper called on the host.
-  find('inkOf', "the host's ink (the argument the site passes the element renderer before liftsHoverCards)",
-    `${esc(names.buildTree)}\\(${id},${id}\\.handlers,${id},${id},(${id})\\(${id}\\),${id}\\.liftsHoverCards`)
+  // A fresh collector for what one draw leaves behind: the image leaves, the hover rules, the groups. An arrow until
+  // app 3.6556, a function declaration since.
+  find('newMarks', 'the marks collector (() => ({leaves: [], hoverRules: [], ...}))',
+    new RegExp(`function ${id}\\(\\)\\{return\\{leaves:\\[\\],hoverRules:\\[\\]`).test(src)
+      ? `function (${id})\\(\\)\\{return\\{leaves:\\[\\],hoverRules:\\[\\]`
+      : `(${id})=\\(\\)=>\\(\\{leaves:\\[\\],hoverRules:\\[\\]`)
+  // The element renderer. Until app 3.6556 it took (tree, handlers, colorOf = ..., marks = newMarks(), ink, lifts);
+  // since, (tree, handlers, { marks, ink, liftsHoverCards }), with the colour resolver inside it.
+  if (new RegExp(`function ${id}\\(${id},${id},${id}=${id},${id}=${esc(names.newMarks)}\\(\\)`).test(src)) {
+    buildTreeShape = 'positional'
+    find('buildTree', 'the element renderer (tree, handlers, colorOf = ..., marks = newMarks(), ...)',
+      `function (${id})\\(${id},${id},${id}=${id},${id}=${esc(names.newMarks)}\\(\\)`)
+    find('colorOf', "the colour resolver (the element renderer's default colorOf)",
+      `function ${esc(names.buildTree)}\\(${id},${id},${id}=(${id}),`)
+    find('inkOf', "the host's ink (the argument the site passes the element renderer before liftsHoverCards)",
+      `${esc(names.buildTree)}\\(${id},${id}\\.handlers,${id},${id},(${id})\\(${id}\\),${id}\\.liftsHoverCards`)
+  } else {
+    buildTreeShape = 'options'
+    find('buildTree', 'the element renderer (tree, handlers, { marks = newMarks(), ink, liftsHoverCards })',
+      `function (${id})\\(${id},${id},${id}\\)\\{let ${id}=${id}\\(${id},\\{handlers:${id},colorOf:${id},marks:${id}\\?\\.marks\\?\\?${esc(names.newMarks)}\\(\\)`)
+    find('inkOf', "the host's ink (the ink: the site passes the element renderer)",
+      `${esc(names.buildTree)}\\(${id},${id}\\.handlers,\\{marks:${id},ink:(${id})\\(${id}\\)`)
+  }
   // Writes the collected hover rules into one <style>, wrapped in @media (hover:hover).
   find('applyHover', 'the hover-rule writer (one <style> with @media (hover:hover){...})',
     `function (${id})\\((${id}),(${id})\\)\\{let ${id}=\\3\\.length===0\\?"":\`@media \\(hover:hover\\)\\{`)

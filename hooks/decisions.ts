@@ -44,17 +44,17 @@ function routeOf(id: string): DecisionRoute | undefined {
 }
 
 /** The models the settings offer to add, each with the short name it goes by there. Any other id can be typed in. */
-export const DECISION_PRESETS: readonly { id: string; label: string }[] = [
-  { id: 'opencode/jev-1.13-free', label: 'Zen Jev (free)' },
-  { id: 'openrouter/inception/mercury-decide:free', label: 'Mercury (free)' },
-  { id: 'openrouter/microsoft/microsoft-decision-1', label: 'Microsoft decision' },
-  { id: 'openrouter/typesafe/jev-1.13', label: 'Jev on OpenRouter' },
-  { id: 'typesafe/jev-latest', label: 'TypeSafe Jev' },
+export const DECISION_PRESETS: readonly { id: string }[] = [
+  { id: 'opencode/jev-1.13-free' },
+  { id: 'openrouter/inception/mercury-decide:free' },
+  { id: 'openrouter/microsoft/microsoft-decision-1' },
+  { id: 'openrouter/typesafe/jev-1.13' },
+  { id: 'typesafe/jev-latest' },
 ]
 
-/** The short name the settings show: a preset's own, else the provider and model. */
+/** The name the settings show: the model's own id, as its provider knows it (the provider shows as its logo). */
 export function routeLabel(route: DecisionRoute): string {
-  return DECISION_PRESETS.find(p => p.id === route.id)?.label ?? routeName(route)
+  return route.model
 }
 
 /** Routes back as the setting's text. */

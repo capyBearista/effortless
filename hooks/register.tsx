@@ -6,7 +6,7 @@ import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolL
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
 import { chainIds, DECISION_PRESETS, type DecisionRoute, hopTimeout, MAX_ROUTES, movedEarlier, OPENROUTER_URL, parseDecisionModels, routeLabel, routeName, withoutRoute, withRoute, ZEN_URL } from './decisions'
-import { accent, setLight, setTheme, themedEls, type ThemeName, THEMES, tintHex } from './theme'
+import { accent, setLight, setMatchApp, setTheme, themedEls, type ThemeName, THEMES, tintHex } from './theme'
 import { PILL_H, stepsFromTodos, thinkingSvg, THINK_W, withTaskCreated, withTaskUpdated } from './progress'
 
 // The ladders the two sliders walk, cheapest first.
@@ -50,6 +50,8 @@ let claudeIsLight = false
 let appearanceCheckedAt = -Infinity
 function applyAppearance() {
   setLight(config.appearance === 'light' || (config.appearance === 'auto' && claudeIsLight))
+  // Where the band draws images the app's own light or dark is followed instead (theme.ts, setMatchApp).
+  setMatchApp(config.appearance === 'auto')
 }
 /** Reads Claude Code's theme row (at most every few seconds) and redraws when light or dark changed. */
 async function refreshAppearance($: EngineInterface) {
@@ -4586,7 +4588,8 @@ Saved to ${out}.md and .json` }
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     // The dashboard look keeps all of this in the band above the prompt; the app's own footer shows.
     if (e.surface !== 'desktop' || config.layout === 'default') return next(e)
-    const { Box, Text, Button } = themedEls($.ui.resolve(e))
+    // The footer sits on the app's own surface, not on a panel of the mod's: it follows the app whatever the appearance.
+    const { Box, Text, Button } = themedEls($.ui.resolve(e), { onApp: true })
     const v = await snap($)
     const handoffNow = (await read($, handoffStage)) !== null
     const needsSetup = await read($, setupPending)
@@ -5148,7 +5151,7 @@ Saved to ${out}.md and .json` }
               ? [pick({ key: 'settings-model-add', label: 'Add', value: '-', options: [
                     // The terminal draws a short list as buttons, where a placeholder would be one more button.
                     ...(term ? [] : [{ value: '-', label: chain.length ? 'Another model' : 'The first model' }]),
-                    ...DECISION_PRESETS.filter(p => !chain.some(r => r.id === p.id)).map(p => ({ value: p.id, label: p.label })),
+                    ...DECISION_PRESETS.filter(p => !chain.some(r => r.id === p.id)).map(p => ({ value: p.id, label: routeLabel(parseDecisionModels(p.id)[0]!) })),
                     { value: 'other', label: 'Other…' },
                   ], onSelect: (v: string) => v === 'other' ? set('modelOther')(draft.modelOther ?? '') : v !== '-' ? set('decisionModels')(withRoute(shown.decisionModels, v)) : undefined })]
               : []),
@@ -5224,7 +5227,7 @@ Saved to ${out}.md and .json` }
               ? []
               : [
                   pick({ key: "settings-layout", label: "Look", value: shown.layout, options: [{ value: 'default', label: 'Dashboard' }, { value: 'minimal', label: 'Minimal' }], onSelect: set('layout') }),
-                  pick({ key: "settings-appearance", label: "Appearance", value: shown.appearance, options: [{ value: 'auto', label: 'Match Claude Code' }, { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }], onSelect: set('appearance') }),
+                  pick({ key: "settings-appearance", label: "Appearance", value: shown.appearance, options: [{ value: 'auto', label: term ? 'Match Claude Code' : 'Match app' }, { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }], onSelect: set('appearance') }),
                   pick({ key: "settings-theme", label: "Theme", value: shown.theme, options: [{ value: 'violet', label: 'Violet' }, { value: 'orange', label: 'Claude orange' }, { value: 'rose', label: 'Cherry blossom' }], onSelect: set('theme') }),
                 ]),
             ...toggles,
@@ -5567,11 +5570,13 @@ Saved to ${out}.md and .json` }
         ])
       }
       if (step === 'look') {
-        // Match Claude Code is the default; the other two fix it. The choice shows at once.
+        // Match is the default: Claude Code's theme in the terminal, the app's own light or dark elsewhere (theme.ts,
+        // setMatchApp). The other two fix it. The choice shows at once.
         const mode = shown.appearance
+        const matchLabel = e.surface === 'terminal' ? 'Match Claude Code' : 'Match app'
         return band('Dark or light panels?', 56, [
           ...(['auto', 'dark', 'light'] as const).map(value => (
-            <Button key={`setup-look-${value}`} plain label={`${mode === value ? '◉' : '○'} ${{ auto: 'Match Claude Code', dark: 'Dark', light: 'Light' }[value]}`} onPress={() => pick('appearance', value)} />
+            <Button key={`setup-look-${value}`} plain label={`${mode === value ? '◉' : '○'} ${{ auto: matchLabel, dark: 'Dark', light: 'Light' }[value]}`} onPress={() => pick('appearance', value)} />
           )),
           ...nav(nextButton),
         ])

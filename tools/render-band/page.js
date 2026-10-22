@@ -109,7 +109,10 @@
       root.querySelector('[data-engine-tree]')?.remove()
       const shaped = app.shapeTree(tree) // the band's shapeTree (without the host's "Turn off" button)
       const marks = app.newMarks()
-      const drawn = app.buildTree(shaped, handlers, app.colorOf, marks, app.inkOf(host), true)
+      // The element renderer's arguments changed shape in app 3.6556 (render.mjs, rendererNames).
+      const drawn = R.buildTreeShape === 'options'
+        ? app.buildTree(shaped, handlers, { marks, ink: app.inkOf(host), liftsHoverCards: true })
+        : app.buildTree(shaped, handlers, app.colorOf, marks, app.inkOf(host), true)
       if (drawn) {
         drawn.setAttribute('data-engine-tree', '')
         if (!drawn.matches('a[href],button,input,select,textarea')) drawn.setAttribute('tabindex', '-1')
