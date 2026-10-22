@@ -127,7 +127,14 @@ async function clickable(ui: { drawn: () => Promise<unknown> }, layer: string) {
   const node = find(await ui.drawn())
   expect(node).toBeDefined()
   const props = ((node as Record<string, unknown>).props ?? node) as Record<string, unknown>
-  expect(props.position).toBe('absolute')
+  // Either an absolute layer, or a box in the flow made positioned by an empty absolute child (the dashboard's and the
+  // handoff bar's controls): both paint over the art.
+  const kids = ((node as Record<string, unknown>).children ?? []) as Record<string, unknown>[]
+  const positioned = kids.some(k => {
+    const p = (k?.props ?? {}) as Record<string, unknown>
+    return k?.type === 'Box' && p.position === 'absolute' && !((k.children as unknown[] | undefined)?.length)
+  })
+  expect(props.position === 'absolute' || positioned).toBe(true)
 }
 
 describe('auto', () => {

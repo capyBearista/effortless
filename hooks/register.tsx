@@ -6,7 +6,7 @@ import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolL
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
 import { chainIds, DECISION_PRESETS, type DecisionRoute, hopTimeout, MAX_ROUTES, movedEarlier, OPENROUTER_URL, parseDecisionModels, routeLabel, routeName, withoutRoute, withRoute, ZEN_URL } from './decisions'
-import { accent, setLight, setMatchApp, setTheme, themedEls, type ThemeName, THEMES, tintHex } from './theme'
+import { accent, onKnob, setLight, setMatchApp, setTheme, themedEls, type ThemeName, THEMES, tintHex } from './theme'
 import { PILL_H, stepsFromTodos, thinkingSvg, THINK_W, withTaskCreated, withTaskUpdated } from './progress'
 
 // The ladders the two sliders walk, cheapest first.
@@ -2445,7 +2445,7 @@ export function settingsSvg(color: string): string {
 
 /** The settings rows' icons, drawn in the cog's outline style (14 px, 1.3 stroke) rather than font glyphs, which
  * differ per font. */
-export function rowIconSvg(kind: 'effort' | 'model' | 'judge' | 'handoff' | 'show' | 'quick' | 'full', color: string): string {
+export function rowIconSvg(kind: 'effort' | 'model' | 'judge' | 'handoff' | 'show' | 'quick' | 'full', color: string, onKnobToo = false): string {
   const shapes = {
     // A gauge: an open arc with a needle.
     effort: '<path d="M2.6 10.4A5 5 0 1 1 11.4 10.4"/><path d="M7 8.2L9.6 5.2"/><circle cx="7" cy="8.6" r=".9"/>',
@@ -2467,7 +2467,7 @@ export function rowIconSvg(kind: 'effort' | 'model' | 'judge' | 'handoff' | 'sho
       ? 'M8.6 1 2.8 8.2H6.6L5.4 13 11.2 5.8H7.4Z'
       // A pen: the full handoff, written out by your skill.
       : 'M10.2 1.5 12.5 3.8 5.3 11 2.3 11.7 3 8.7ZM9 2.7 11.3 5'
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><path d="${solid}" fill="${color}" stroke="${color}" stroke-width="0.6" stroke-linejoin="round"/></svg>`
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><path${onKnobToo ? ' data-keep="1"' : ''} d="${solid}" fill="${color}" stroke="${color}" stroke-width="0.6" stroke-linejoin="round"/></svg>`
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><g fill="none" stroke="${color}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision">${shapes}</g></svg>`
 }
@@ -5338,8 +5338,9 @@ Saved to ${out}.md and .json` }
             <Box position="absolute" top={0} bottom={0} left={0} right={0} flexDirection="row" alignItems="center">
               {(['quick', 'full'] as const).map(k => (
                 <Box key={`handoff-kind-${k}`} flexGrow={1} width={0} flexDirection="row" alignItems="center" justifyContent="center">
-                  <Box flexShrink={0} width={2} alignItems="center"><Svg source={rowIconSvg(k, choice.kind === k ? '#141416' : DASH_DIM)} alt={k === 'quick' ? 'bolt' : 'pen'} width={14} height={14} /></Box>
-                  <Text color={choice.kind === k ? '#141416' : DASH_DIM}>{k === 'quick' ? 'Quick' : 'Full'}</Text>
+                  <Box flexShrink={0} width={2} alignItems="center"><Svg source={rowIconSvg(k, choice.kind === k ? '#141416' : DASH_DIM, choice.kind === k)} alt={k === 'quick' ? 'bolt' : 'pen'} width={14} height={14} /></Box>
+                  {/* The picked word is on the knob, which keeps its colour whatever the app is (onKnob). */}
+                  <Text color={choice.kind === k ? onKnob('#141416') : DASH_DIM}>{k === 'quick' ? 'Quick' : 'Full'}</Text>
                 </Box>
               ))}
             </Box>
@@ -5378,22 +5379,42 @@ Saved to ${out}.md and .json` }
       if (e.surface === 'terminal') return terminalPanel($, e, 'handoff-bar', '⇥ Handoff', line, [focusField, ...controls])
       return (
         // The art is a still image here: an animated one sits in a frame the app rebuilds on every redraw, and the bar
-        // redraws on every choice. The title over the line on what happens, on the left; the controls on the right in
-        // their own absolute layer, drawn last: the app draws anything in the flow under the absolute art, where it takes
-        // no clicks.
-        <Box key="handoff-bar" position="relative" flexDirection="row" alignItems="center" paddingX={1} overflow="hidden"
+        // redraws on every choice. Two rows, so nothing has to share: the name and what the picked kind does on the left
+        // of the first, the controls on its right; the focus field across the second, Compact instead after it. Each
+        // control's box holds an empty absolute child, which makes it positioned and paints it over the art (a plain flow
+        // box sits under the art and takes no clicks).
+        <Box key="handoff-bar" position="relative" flexDirection="column" paddingX={1} overflow="hidden"
           backgroundColor={BRAND_BG} borderStyle="round" borderColor={BRAND_EDGE}>
           <Box key="handoff-art" position="absolute" top={-1} right={0} bottom={-1}>
             <Svg source={BRAND_SVG} alt="effortless" width={FROST_WIDTH * 2} height={FROST_HEIGHT * 2} />
           </Box>
           {/* The entrance as the bar opens, only then: a choice redraws the bar. */}
           {introLayer({ Box, Svg }, 'handoff', await introShows($, 'handoff'))}
-          {/* One line: the name, the focus field, then what the picked kind does, dim. The line gives way first, then
-              the field; the field sits in a window like Compact's note, its own Enter hint clipped off the right. */}
-          <Box key="handoff-words" position="relative" flexDirection="row" alignItems="center" gap={1} flexShrink={1} minWidth={0}>
-            <Text color={ACCENT} bold wrap="truncate">
-              ⇥ Handoff
-            </Text>
+          {/* The words give way first (the line, then the name); the controls keep their width. */}
+          <Box key="handoff-row" flexDirection="row" alignItems="center" gap={1}>
+            <Box key="handoff-words" position="relative" flexDirection="row" alignItems="center" gap={1} flexGrow={1} flexShrink={1} minWidth={0}>
+              <Box flexShrink={0}>
+                <Text color={ACCENT} bold wrap="truncate">
+                  ⇥ Handoff
+                </Text>
+              </Box>
+              <Box key="handoff-what-box" flexShrink={1} minWidth={0}>
+                <Text key="handoff-what" dimColor wrap="truncate">
+                  {line}
+                </Text>
+              </Box>
+            </Box>
+            <Box key="handoff-actions" position="relative" flexShrink={0} flexDirection="row" gap={1} alignItems="center">
+              <Box position="absolute" top={0} left={0} />
+              {controls}
+            </Box>
+          </Box>
+          <Box key="handoff-gap" height={0.5} />
+          {/* The field in a window like Compact's note, anchored right: its own Enter hint (a 12 px submit button) is
+              pushed past the window's right edge and clipped. The app gives the field its own width (about 32 cells, it
+              does not stretch), so the window is a little wider and the field starts near the bar's left edge. The
+              window reaches a row above and below the field, so its focus ring is not cut. */}
+          <Box key="handoff-row-focus" flexDirection="row" alignItems="center" gap={2}>
             <Box key="handoff-field" position="relative" width={34} minWidth={8} height={1} flexShrink={1}>
               <Box position="absolute" top={-1} bottom={-1} left={0} right={0} overflow="hidden">
                 <Box position="absolute" top={0} bottom={0} right={-3} width={46} flexDirection="row" alignItems="center" justifyContent="flex-end" paddingRight={1}>
@@ -5401,16 +5422,13 @@ Saved to ${out}.md and .json` }
                 </Box>
               </Box>
             </Box>
-            <Box key="handoff-what-box" flexShrink={4} minWidth={0}>
-              <Text key="handoff-what" dimColor wrap="truncate">
-                {line}
-              </Text>
-            </Box>
-          </Box>
-          <Box flexGrow={1} minWidth={48} />
-          <Box key="handoff-actions" position="absolute" top={0} right={1} bottom={0} flexDirection="row" gap={1} alignItems="center">
-            {!term ? <Button key="handoff-to-compact" plain dimColor label="Compact instead" onPress={async () => { await closeHandoffBar($); await openCompact($, e) }} /> : null}
-            {controls}
+            <Box flexGrow={1} />
+            {!term ? (
+              <Box key="handoff-to-compact-box" position="relative" flexShrink={0}>
+                <Box position="absolute" top={0} left={0} />
+                <Button key="handoff-to-compact" plain dimColor label="Compact instead" onPress={async () => { await closeHandoffBar($); await openCompact($, e) }} />
+              </Box>
+            ) : null}
           </Box>
         </Box>
       )

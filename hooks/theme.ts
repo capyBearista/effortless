@@ -183,6 +183,7 @@ export function matchAppSvg(source: string): string {
 
 /**
  * One hex as the app's theme key of its kind, for Match app. Text: the light greys are 'text', the dim ones 'inactive',
+ * near-black (on a white pill) 'inverseText',
  * and a colour goes to the key of its hue (Claude orange is 'claude', violet 'merged', green 'success'). Pink has no key,
  * so it is kept at a middle lightness that reads on black and on white. A border: grey is 'subtle', a hover's 'inactive'.
  */
@@ -192,6 +193,9 @@ export function matchAppColor(hex: string, role: 'text' | 'border' | 'hover-bord
   if (chroma < 0.08 || s < 0.15) {
     if (role === 'border') return 'subtle'
     if (role === 'hover-border') return 'inactive'
+    // Near-black text only sits on a white pill (Compact, a loud Handoff), which turns dark on a light app as the app's
+    // own primary buttons do: the app's inverse ink follows it.
+    if (l < 0.15) return 'inverseText'
     return l >= 0.62 ? 'text' : 'inactive'
   }
   if (h >= 345 || h < 8) return 'error'
@@ -211,7 +215,7 @@ const BORDERS = ['borderColor', 'borderTopColor', 'borderBottomColor', 'borderLe
 export function matchAppProps(props: Record<string, unknown>, hover = false): Record<string, unknown> {
   let out = props
   const color = tintOrSelf(props.color)
-  if (isHex(color)) out = { ...out, color: matchAppColor(color, 'text') }
+  if (isHex(color) && !isKept(color)) out = { ...out, color: matchAppColor(color, 'text') }
   const bg = props.backgroundColor
   // A painted surface is the app's own; a hover's fill is left out, the app draws its own hover on a control.
   // The engine refuses a prop set to undefined, so a dropped one is taken out.
@@ -229,6 +233,12 @@ export function matchAppProps(props: Record<string, unknown>, hover = false): Re
   return out
 }
 const tintOrSelf = (v: unknown) => (isHex(v) ? tintHex(v) : v)
+/**
+ * A text colour that sits on a colour of its own (a switch's knob), not on the panel: Match app leaves it as it is, as
+ * tint leaves a data-keep shape. Written as the hex with a full alpha, which draws the same.
+ */
+export const onKnob = (hex: string) => `${hex.slice(0, 7)}ff`
+const isKept = (v: unknown) => typeof v === 'string' && /^#[0-9a-fA-F]{6}ff$/i.test(v)
 
 /** The accent as text colour. */
 export const accent = () => tintHex(VIOLET)

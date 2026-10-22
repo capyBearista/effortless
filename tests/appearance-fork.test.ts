@@ -8,6 +8,7 @@ describe('match app (fork)', () => {
   test('text hexes become the theme key of their kind', () => {
     expect(matchAppColor('#d4d4d8', 'text')).toBe('text')
     expect(matchAppColor('#8b8b93', 'text')).toBe('inactive')
+    expect(matchAppColor('#141416', 'text')).toBe('inverseText')
     expect(matchAppColor('#a79cf7', 'text')).toBe('merged')
     expect(matchAppColor('#d97757', 'text')).toBe('claude')
     expect(matchAppColor('#e5534b', 'text')).toBe('error')
