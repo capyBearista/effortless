@@ -5,6 +5,7 @@ import type { AgentRec, Effort, HandoffAfter, HandoffChoice, ModelKey, Pick, Set
 import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolLine, touchOf, withTouch, withWaits } from './agents'
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
+import { type DecisionRoute, hopTimeout, OPENROUTER_URL, parseDecisionModels, routeName, ZEN_URL } from './decisions'
 import { accent, setLight, setTheme, themedEls, type ThemeName, THEMES, tintHex } from './theme'
 import { PILL_H, stepsFromTodos, thinkingSvg, THINK_W, withTaskCreated, withTaskUpdated } from './progress'
 
@@ -593,6 +594,14 @@ function warnJudge($: EngineInterface, reason: string) {
 export type JudgeConfig = {
   judge: 'auto' | 'haiku' | 'jev'
   typesafeKey: string
+  /** Fork: decision models asked in order before Haiku. Empty: Jev on TypeSafe alone, as upstream does. */
+  decisionModels: DecisionRoute[]
+  /** For the openrouter/ decision models; left empty, OPENROUTER_API_KEY is used. */
+  openrouterKey: string
+  /** How long each decision model may take, in ms. */
+  judgeTimeoutMs: number
+  /** How long all the decision models together may take before Haiku judges, in ms. */
+  judgeBudgetMs: number
   /** A skill or slash command that writes the handoff instead of the built-in prompt, e.g. "session-handoff". */
   handoffSkill: string
   /** What follows the handoff: clear and carry on, clear and wait, or keep the chat and copy the handoff. The handoff
@@ -637,6 +646,10 @@ let pluginOptions: Record<string, unknown> = {}
 let config: JudgeConfig = {
   judge: 'auto',
   typesafeKey: '',
+  decisionModels: [],
+  openrouterKey: '',
+  judgeTimeoutMs: 4000,
+  judgeBudgetMs: 8000,
   handoffSkill: '',
   handoffAfter: 'continue',
   bias: 0,
@@ -661,6 +674,11 @@ export function readConfig(options: unknown): JudgeConfig {
   return {
     judge: picked === 'haiku' || picked === 'jev' ? picked : 'auto',
     typesafeKey: str(o.typesafeKey),
+    decisionModels: parseDecisionModels(str(o.decisionModels)),
+    openrouterKey: str(o.openrouterKey),
+    // Zen's free Jev answered in 0.2-6.5 s (measured 2026-10-22); a prompt.submit hook gets about 10 s in all.
+    judgeTimeoutMs: Math.max(1000, Math.min(9000, Math.round(Number(str(o.judgeTimeoutMs)) || 4000))),
+    judgeBudgetMs: Math.max(1000, Math.min(9000, Math.round(Number(str(o.judgeBudgetMs)) || 8000))),
     handoffSkill: str(o.handoffSkill).replace(/^\//, ''),
     handoffAfter: (['confirm', 'copy'] as const).find(a => a === str(o.handoffAfter)) ?? 'continue',
     bias: Math.max(-2, Math.min(2, Math.round(Number(str(o.effortBias)) || 0))),
@@ -702,6 +720,12 @@ function judgeQuestion(prompt: string, current: Pick | null, context: string): s
  */
 async function judge($: EngineInterface, prompt: string, current: Pick | null): Promise<Judged> {
   const context = await recentContext($).catch(() => '')
+  // Fork: with decision models set, they replace the TypeSafe-only Jev; Haiku still has the last word.
+  if (config.judge !== 'haiku' && config.decisionModels.length) {
+    const jev = (await askChain($, prompt, current, context))?.judged
+    if (jev) return jev.verdict?.why === UNSURE ? haikuAfter($, jev, prompt, current, context) : jev
+    return askHaiku($, prompt, current, context)
+  }
   const key = config.judge !== 'haiku' ? await jevKey($).catch(() => undefined) : undefined
   if (key) {
     const jev = await askJev($, key, prompt, current, context)
@@ -718,14 +742,73 @@ async function haikuAfter($: EngineInterface, jev: Judged, prompt: string, curre
 
 /** Jev on TypeSafe: an answer, or nothing when it fails, is unsure of its own format or takes too long. */
 async function askJev($: EngineInterface, key: string, prompt: string, current: Pick | null, context: string): Promise<Judged | undefined> {
+  const asked = await askDecision($, { name: 'Jev', url: (await envJevUrl($)) ?? JEV_URL, model: 'jev-latest', key, timeoutMs: JEV_TIMEOUT_MS }, prompt, current, context)
+  if ('judged' in asked) return asked.judged
+  if (!asked.quiet) warnJudge($, asked.reason)
+  return undefined
+}
+
+/** The key a decision model needs: none on Zen, the OpenRouter key, or the TypeSafe key Jev already uses. */
+async function routeKey($: EngineInterface, route: DecisionRoute): Promise<string | undefined> {
+  if (route.provider === 'zen') return undefined
+  if (route.provider === 'openrouter') return config.openrouterKey || (await envOpenRouterKey($)) || undefined
+  return jevKey($).catch(() => undefined)
+}
+
+/**
+ * Fork: the decision models in the order set, each until one answers. A failed one passes to the next; a model with
+ * no key is skipped without a request. An unsure answer still ends the chain (Haiku decides, as with Jev). The person
+ * hears only when none answered, once, with the last reason. Never throws.
+ */
+async function askChain($: EngineInterface, prompt: string, current: Pick | null, context: string): Promise<{ judged: Judged; name: string } | undefined> {
+  const start = await $.clock.now()
+  let failed: string | undefined
+  let skipped: string | undefined
+  for (const route of config.decisionModels) {
+    const name = routeName(route)
+    const key = await routeKey($, route)
+    if (route.provider !== 'zen' && !key) {
+      skipped = skipped ?? `${name} has no key`
+      continue
+    }
+    const timeoutMs = hopTimeout(start, await $.clock.now(), config.judgeTimeoutMs, config.judgeBudgetMs)
+    if (timeoutMs === undefined) {
+      failed = 'the decision models ran out of time'
+      break
+    }
+    const url = route.provider === 'zen' ? ZEN_URL : route.provider === 'openrouter' ? OPENROUTER_URL : ((await envJevUrl($)) ?? JEV_URL)
+    const asked = await askDecision($, { name, url, model: route.model, key, timeoutMs }, prompt, current, context)
+    if ('judged' in asked) {
+      void proof($, `judge: ${name} answered`)
+      return { judged: asked.judged, name }
+    }
+    void proof($, `judge: ${asked.reason}, next`)
+    failed = asked.reason
+  }
+  const reason = failed ?? skipped
+  if (reason) warnJudge($, reason)
+  return undefined
+}
+
+/** One decision model, asked once: its verdict, or why not (quiet when it answered in a shape that is not a verdict). */
+async function askDecision(
+  $: EngineInterface,
+  ask: { name: string; url: string; model: string; key?: string; timeoutMs: number },
+  prompt: string,
+  current: Pick | null,
+  context: string,
+): Promise<{ judged: Judged } | { reason: string; quiet?: true }> {
   try {
-    // A stalled endpoint must not hold the prompt: after JEV_TIMEOUT_MS the judge falls through to Haiku.
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    // Zen's free models take no key; a stray one would go to a server that never asked for it.
+    if (ask.key) headers.authorization = `Bearer ${ask.key}`
+    // A stalled endpoint must not hold the prompt: after the timeout the judge falls through to the next.
     const res = await Promise.race([
-      $.http.fetch((await envJevUrl($)) ?? JEV_URL, {
+      $.http.fetch(ask.url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+        headers,
         body: JSON.stringify({
-          model: 'jev-latest',
+          model: ask.model,
           state: {
             task: JEV_TASK,
             current_model: current?.model ?? null,
@@ -739,12 +822,12 @@ async function askJev($: EngineInterface, key: string, prompt: string, current: 
           },
         }),
       }),
-      $.clock.sleep(JEV_TIMEOUT_MS).then(() => {
+      $.clock.sleep(ask.timeoutMs).then(() => {
         throw new Error('jev timeout')
       }),
     ])
-    if (!res.ok) warnJudge($, judgeFailure('Jev', res.status))
-    const verdict = res.ok ? parseJevAnswer(res.text, current) : undefined
+    if (!res.ok) return { reason: judgeFailure(ask.name, res.status) }
+    const verdict = parseJevAnswer(res.text, current)
     if (verdict) {
       let used = 0
       try {
@@ -754,13 +837,13 @@ async function askJev($: EngineInterface, key: string, prompt: string, current: 
         // No usage in the reply: counted as 0.
       }
       if (await read($, judgeDown)) await update($, judgeDown, () => null)
-      return { verdict: { ...verdict, by: 'jev' }, tokens: used }
+      return { judged: { verdict: { ...verdict, by: 'jev' }, tokens: used } }
     }
+    return { reason: `${ask.name} gave no usable answer`, quiet: true }
   } catch (error) {
-    // Jev down or slow: fall through to Haiku, and say so.
-    warnJudge($, String(error).includes('timeout') ? judgeFailure('Jev', 'timeout') : 'Jev could not be reached')
+    // Down or slow: the caller falls through to the next judge, and says so.
+    return { reason: String(error).includes('timeout') ? judgeFailure(ask.name, 'timeout') : `${ask.name} could not be reached` }
   }
-  return undefined
 }
 
 // Set while the settings panel tests a judge: warnJudge leaves its reason here instead of warning.
@@ -777,6 +860,12 @@ async function testJudge($: EngineInterface, judgeKind: string, draftKey: string
     j?.verdict?.why === UNSURE ? `${name} answered, unsure on the sample` : `${name} answered: ${j?.verdict?.effort}`
   judgeTesting = {}
   try {
+    // Fork: with decision models set, the test walks them as a prompt would and names the one that answered.
+    if (judgeKind !== 'haiku' && config.decisionModels.length) {
+      const chained = await askChain($, JUDGE_TEST_PROMPT, null, '')
+      if (chained) return { ok: true, text: `${said(chained.name, chained.judged)} in ${await took()}` }
+      return { ok: false, text: judgeTesting.reason ?? 'No decision model gave a usable answer' }
+    }
     if (judgeKind === 'jev' || judgeKind === 'auto') {
       const key = parseJevKey(draftKey) ?? (draftKey.trim() || undefined) ?? (await jevKey($).catch(() => undefined)) ?? (await typesafeKeyAnywhere($).catch(() => undefined))
       if (!key && judgeKind === 'jev') return { ok: false, text: 'No TypeSafe key found' }
@@ -1038,6 +1127,7 @@ let askTmpdir: EnvAsk
 let askModelUi: EnvAsk
 let askJevUrl: EnvAsk
 let askJevKey: EnvAsk
+let askOpenRouterKey: EnvAsk
 let askUserProfile: EnvAsk
 let askHome: EnvAsk
 const envLog = ($: EngineInterface) => (askLog = askLog ?? $.env.get('EFFORTLESS_LOG'))
@@ -1046,6 +1136,7 @@ const envTmpdir = ($: EngineInterface) => (askTmpdir = askTmpdir ?? $.env.get('T
 const envModelUi = ($: EngineInterface) => (askModelUi = askModelUi ?? $.env.get('EFFORTLESS_MODEL_UI'))
 const envJevUrl = ($: EngineInterface) => (askJevUrl = askJevUrl ?? $.env.get('JEV_URL'))
 const envJevKey = ($: EngineInterface) => (askJevKey = askJevKey ?? $.env.get('TYPESAFE_API_KEY'))
+const envOpenRouterKey = ($: EngineInterface) => (askOpenRouterKey = askOpenRouterKey ?? $.env.get('OPENROUTER_API_KEY'))
 const envUserProfile = ($: EngineInterface) => (askUserProfile = askUserProfile ?? $.env.get('USERPROFILE'))
 const envHome = ($: EngineInterface) => (askHome = askHome ?? $.env.get('HOME'))
 
@@ -2616,6 +2707,9 @@ function handoffCardTree($: EngineInterface, e: RenderInput<'AssistantMessage'> 
  * Releases between publishes (releases.json) reach the dev channel, never this card. */
 // The API, not raw.githubusercontent.com: the raw file sits behind a cache that lagged two releases behind.
 const RELEASES_URL = 'https://api.github.com/repos/HeyCubit/effortless/contents/public.json?ref=main'
+/** Fork: installed from the fork's marketplace (capybearista), where upstream's update card would offer HeyCubit's
+ * build over this one. */
+const isForkInstall = ($: EngineInterface) => /[\\/]cache[\\/]capybearista[\\/]/.test($.plugin.root)
 const WHATS_NEW_URL = 'https://heycubit.github.io/effortless/whats-new/'
 /** The site, the link Share copies for a friend. */
 const SITE_URL = 'https://heycubit.github.io/effortless/'
@@ -2759,6 +2853,11 @@ async function afterLoad($: EngineInterface) {
   await checkUpdate($)
 }
 async function checkUpdate($: EngineInterface) {
+  // Fork: upstream's releases would offer to replace this build with HeyCubit's; it updates with git pull instead.
+  if (isForkInstall($)) {
+    lastUpdateCheck = 'fork build: update it with git pull in its clone'
+    return
+  }
   const shown = await read($, updateCard)
   if (shown && shown.stage !== 'offer') {
     lastUpdateCheck = `skipped while the ${shown.stage} card shows`

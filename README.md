@@ -11,6 +11,21 @@
 
 https://github.com/user-attachments/assets/9b5af48e-2ad8-4826-9443-4aeea1306664
 
+> [!NOTE]
+> **Fork: decision-model chain.** This fork of [HeyCubit/effortless](https://github.com/HeyCubit/effortless) can ask an ordered list of decision models before Haiku, on OpenCode Zen, OpenRouter or TypeSafe. Each failure (error, timeout, unusable answer) passes to the next model; a model with no key is skipped. When none answers, Haiku judges and one toast says why.
+>
+> Set it in `/plugin` → effortless → Configure:
+>
+> | Setting | Example |
+> |---|---|
+> | `decisionModels` | `opencode/jev-1.13-free, openrouter/inception/mercury-decide:free, openrouter/perplexity/pplx-decider-v1.1-27b, openrouter/microsoft/microsoft-decision-1, openrouter/typesafe/jev-1.13` |
+> | `openrouterKey` | your OpenRouter key (or `OPENROUTER_API_KEY` in the environment) |
+> | `judgeTimeoutMs` / `judgeBudgetMs` | per model / all models together, default 4000 / 8000 |
+>
+> Prefixes: `opencode/<model>` (Zen, free models need no key), `openrouter/<publisher>/<model>`, `typesafe/<model>` (TypeSafe key). Left empty, the fork behaves as upstream. Every call sends your next message (up to 4,000 characters) and the last reply's tail to that provider, so only list providers you are happy to send that to.
+>
+> Install: `claude plugin marketplace add capyBearista/effortless`, then `claude plugin install effortless@capybearista` (uninstall `effortless@effortless` first). Update with `claude plugin marketplace update capybearista` and `claude plugin update effortless@capybearista`.
+
 A Claude Code mod that picks the reasoning effort for every prompt. Quick questions get **Low**, hard jobs get **High**,
 and you never touch the Effort control. On real coding tasks it cut the cost of Opus by **21%** against Anthropic's
 recommended medium, **29%** against high and **42%** against xhigh, with every answer still right

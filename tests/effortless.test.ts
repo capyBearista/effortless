@@ -3,6 +3,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
+import { hopTimeout, MAX_ROUTES, parseDecisionModels } from '../hooks/decisions'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
 import { afterPrompt, currentStep, phaseAtTurnEnd, progressShare, progressShows, progressTitle, soundArgv, stepNumber, stepsFromTodos, withTaskCreated, withTaskUpdated } from '../hooks/progress'
@@ -1141,6 +1142,10 @@ describe('judge choice (plugin settings)', () => {
     expect(readConfig({})).toEqual({
       judge: 'auto',
       typesafeKey: '',
+      decisionModels: [],
+      openrouterKey: '',
+      judgeTimeoutMs: 4000,
+      judgeBudgetMs: 8000,
       handoffSkill: '',
       handoffAfter: 'continue',
       bias: 0,
@@ -3982,5 +3987,148 @@ describe('theme', () => {
     } finally {
       setTheme('violet')
     }
+  })
+})
+
+describe('decision models (fork)', () => {
+  const CHAIN = 'opencode/jev-1.13-free, openrouter/typesafe/jev-1.13'
+  /** Answers each decision-model request by its URL, and records what was sent. */
+  function decisions(on: On, reply: (url: string) => { status: number; text: string }) {
+    const calls: { url: string; auth?: string; body: Record<string, any> }[] = []
+    on('http.fetch', (_$, e) => {
+      calls.push({
+        url: e.url,
+        auth: (e.init?.headers as Record<string, string> | undefined)?.authorization,
+        body: JSON.parse(String(e.init?.body)),
+      })
+      const r = reply(e.url)
+      return { value: { status: r.status, ok: r.status < 300, headers: {}, text: r.text } }
+    })
+    return calls
+  }
+  function toasts(on: On) {
+    const said: string[] = []
+    on('ui.toast', (_$, e) => {
+      said.push(String((e as { text?: string }).text ?? e))
+      return { value: undefined } as never
+    })
+    return said
+  }
+
+  test('the setting reads as routes: Zen, OpenRouter and TypeSafe, in order, without junk or repeats', () => {
+    expect(parseDecisionModels('opencode/jev-1.13-free,\n openrouter/inception/mercury-decide:free, typesafe/jev-latest')).toEqual([
+      { id: 'opencode/jev-1.13-free', provider: 'zen', model: 'jev-1.13-free' },
+      { id: 'openrouter/inception/mercury-decide:free', provider: 'openrouter', model: 'inception/mercury-decide:free' },
+      { id: 'typesafe/jev-latest', provider: 'typesafe', model: 'jev-latest' },
+    ])
+    expect(parseDecisionModels('openrouter/jev, opencode/a/b, gpt-5, /x, opencode/jev-1.13-free, opencode/jev-1.13-free')).toEqual([
+      { id: 'opencode/jev-1.13-free', provider: 'zen', model: 'jev-1.13-free' },
+    ])
+    expect(parseDecisionModels('typesafe-ai/jev-1.13.0')[0]).toMatchObject({ provider: 'typesafe', model: 'jev-1.13.0' })
+    expect(parseDecisionModels('')).toEqual([])
+    expect(parseDecisionModels(Array.from({ length: 12 }, (_, i) => `opencode/m${i}`).join(',')).length).toBe(MAX_ROUTES)
+    expect(readConfig({ decisionModels: CHAIN }).decisionModels.map(r => r.provider)).toEqual(['zen', 'openrouter'])
+    expect(readConfig({ judgeTimeoutMs: '50', judgeBudgetMs: '60000' })).toMatchObject({ judgeTimeoutMs: 1000, judgeBudgetMs: 9000 })
+  })
+
+  test('each hop gets its timeout cut to what is left of the budget, and none once it is spent', () => {
+    expect(hopTimeout(0, 0, 4000, 8000)).toBe(4000)
+    expect(hopTimeout(0, 6000, 4000, 8000)).toBe(2000)
+    expect(hopTimeout(0, 7900, 4000, 8000)).toBeUndefined()
+  })
+
+  test('Zen first, with no key; when it fails OpenRouter answers with its key, and Haiku is not asked', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    const asked = judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    const said = toasts(on)
+    const calls = decisions(on, url => (url.includes('opencode.ai') ? { status: 500, text: 'down' } : { status: 200, text: jevReply('max') }))
+    const sent = recordSteps(on)
+
+    await $.prompt.submit({ text: 'designa om hela relayn', wait: false, origin: { kind: 'composer' } })
+    await step($)
+
+    expect(calls.map(c => c.url)).toEqual(['https://opencode.ai/zen/v1/systemone', 'https://openrouter.ai/api/alpha/decisions'])
+    expect(calls[0].auth).toBeUndefined()
+    expect(calls[0].body.model).toBe('jev-1.13-free')
+    expect(calls[1].auth).toBe('Bearer or-k')
+    expect(calls[1].body.model).toBe('typesafe/jev-1.13')
+    expect(calls[1].body.questions.effort.type).toBe('choice')
+    expect(asked.length).toBe(0)
+    expect(said.length).toBe(0)
+    expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'max' })
+  })
+
+  test('an OpenRouter model with no key is skipped without a request; Zen answers', { options: { decisionModels: 'openrouter/typesafe/jev-1.13, opencode/jev-1.13-free' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    const calls = decisions(on, () => ({ status: 200, text: jevReply('low') }))
+    const sent = recordSteps(on)
+
+    await $.prompt.submit({ text: 'byt namn på en variabel', wait: false, origin: { kind: 'composer' } })
+    await step($)
+
+    expect(calls.map(c => c.url)).toEqual(['https://opencode.ai/zen/v1/systemone'])
+    expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'low' })
+  })
+
+  test('OPENROUTER_API_KEY stands in when no key is set', { options: { decisionModels: 'openrouter/typesafe/jev-1.13' } } as never, async ($, on) => {
+    engine(on, { OPENROUTER_API_KEY: 'env-k' })
+    mock.clock(on)
+    judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    const calls = decisions(on, () => ({ status: 200, text: jevReply('high') }))
+    recordSteps(on)
+
+    await $.prompt.submit({ text: 'refaktorera parsern', wait: false, origin: { kind: 'composer' } })
+    await step($)
+
+    expect(calls.length).toBe(1)
+    expect(calls[0].auth).toBe('Bearer env-k')
+  })
+
+  test('when every decision model fails, Haiku judges and one toast names the last reason', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    const asked = judgeSays(on, '{"model":"sonnet","effort":"medium","why":"x"}')
+    const said = toasts(on)
+    const calls = decisions(on, url => (url.includes('opencode.ai') ? { status: 500, text: 'down' } : { status: 429, text: 'slow down' }))
+    const sent = recordSteps(on)
+
+    await $.prompt.submit({ text: 'fixa buggen', wait: false, origin: { kind: 'composer' } })
+    await step($)
+
+    expect(calls.length).toBe(2)
+    expect(asked.length).toBe(1)
+    expect(said).toEqual(['effortless: OpenRouter typesafe/jev-1.13 is rate limited (429). Haiku judges for now.'])
+    expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'medium' })
+  })
+
+  test('an unsure answer ends the chain: Haiku decides and the next model is not asked', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    const asked = judgeSays(on, '{"model":"opus","effort":"high","why":"x"}')
+    const calls = decisions(on, () => ({ status: 200, text: jevReply('low', 0.3) }))
+    recordSteps(on)
+
+    await $.prompt.submit({ text: 'kanske', wait: false, origin: { kind: 'composer' } })
+    await step($)
+
+    expect(calls.length).toBe(1)
+    expect(asked.length).toBe(1)
+  })
+
+  test('with the haiku judge picked, decision models are not asked', { options: { judge: 'haiku', decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    const asked = judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
+    const calls = decisions(on, () => ({ status: 200, text: jevReply('max') }))
+    recordSteps(on)
+
+    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
+    await step($)
+
+    expect(calls.length).toBe(0)
+    expect(asked.length).toBe(1)
   })
 })

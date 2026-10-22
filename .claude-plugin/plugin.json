@@ -1,6 +1,6 @@
 {
   "name": "effortless",
-  "version": "1.71.0",
+  "version": "1.71.0-fork.1",
   "description": "Sets the reasoning effort for every prompt automatically, shows it under the prompt box, and counts down how long the prompt cache stays warm.",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -21,6 +21,31 @@
       "description": "For the jev judge. Stored as a secret by Claude Code. Left empty, TYPESAFE_API_KEY is used, and with judge set to jev also ~/.config/jev/.env.",
       "sensitive": true,
       "default": ""
+    },
+    "decisionModels": {
+      "type": "string",
+      "title": "Decision models (fork)",
+      "description": "Tried in order before Haiku, comma-separated: opencode/<model> (OpenCode Zen, e.g. opencode/jev-1.13-free, no key), openrouter/<publisher>/<model> (OpenRouter, e.g. openrouter/typesafe/jev-1.13), typesafe/<model> (TypeSafe key). Empty: Jev on TypeSafe only, as upstream. Each call sends your next message and the last reply to that provider.",
+      "default": ""
+    },
+    "openrouterKey": {
+      "type": "string",
+      "title": "OpenRouter API key (optional)",
+      "description": "For openrouter/ decision models. Stored as a secret by Claude Code. Left empty, OPENROUTER_API_KEY is used; without either, those models are skipped.",
+      "sensitive": true,
+      "default": ""
+    },
+    "judgeTimeoutMs": {
+      "type": "string",
+      "title": "Decision model timeout (ms)",
+      "description": "How long each decision model may take before the next is asked. 1000-9000.",
+      "default": "4000"
+    },
+    "judgeBudgetMs": {
+      "type": "string",
+      "title": "Decision models budget (ms)",
+      "description": "How long all decision models together may take before Haiku judges. 1000-9000.",
+      "default": "8000"
     },
     "handoffSkill": {
       "type": "string",

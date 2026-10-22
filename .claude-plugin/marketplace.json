@@ -1,10 +1,10 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "effortless",
-  "description": "Mods for Claude Code: automatic reasoning effort and a cache countdown (effortless), and one pixel-art card while Claude works (textless).",
+  "name": "capybearista",
+  "description": "Fork of HeyCubit/effortless with an ordered decision-model chain (OpenCode Zen, OpenRouter, TypeSafe) before Haiku.",
   "owner": {
-    "name": "HeyCubit",
-    "url": "https://github.com/HeyCubit"
+    "name": "capyBearista",
+    "url": "https://github.com/capyBearista"
   },
   "plugins": [
     {
@@ -12,19 +12,8 @@
       "description": "Sets the reasoning effort for every prompt automatically and shows a prompt-cache countdown with one-click Compact.",
       "source": {
         "source": "url",
-        "url": "https://github.com/HeyCubit/effortless.git",
-        "ref": "stable"
-      },
-      "category": "productivity"
-    },
-    {
-      "name": "textless",
-      "description": "While Claude works, the chat shows one tall pixel-art card instead of every step.",
-      "source": {
-        "source": "git-subdir",
-        "url": "https://github.com/HeyCubit/effortless.git",
-        "path": "textless/plugin",
-        "ref": "stable"
+        "url": "https://github.com/capyBearista/effortless.git",
+        "ref": "decisions-chain"
       },
       "category": "productivity"
     }
