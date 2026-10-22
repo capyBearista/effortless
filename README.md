@@ -24,6 +24,8 @@ https://github.com/user-attachments/assets/9b5af48e-2ad8-4826-9443-4aeea1306664
 >
 > Prefixes: `opencode/<model>` (Zen, free models need no key), `openrouter/<publisher>/<model>`, `typesafe/<model>` (TypeSafe key). Left empty, the fork behaves as upstream. Every call sends your next message (up to 4,000 characters) and the last reply's tail to that provider, so only list providers you are happy to send that to.
 >
+> **Fork: a detailed Full handoff.** Full checks git and writes a detailed `HANDOFF.md` (original task, work completed, work remaining, attempted approaches, critical context, current state, suggested skills) to `docs/internal/`, `docs/local/` or `docs/`, whichever exists first, else the project root. Its turn runs at Medium, whatever the last prompt was judged, then the effort goes back. The handoff bar has an optional field for what the next session is for, used by Quick and Full alike (`/effortless handoff full <focus>` does the same).
+>
 > Install: `claude plugin marketplace add capyBearista/effortless#decisions-chain`, then `claude plugin install effortless@capybearista` (uninstall `effortless@effortless` first). Update with `claude plugin marketplace update capybearista` and `claude plugin update effortless@capybearista`.
 
 A Claude Code mod that picks the reasoning effort for every prompt. Quick questions get **Low**, hard jobs get **High**,
@@ -105,7 +107,7 @@ When the cache has gone cold on a big chat, the bar turns to ice with **Compact*
 <p align="center"><img src="docs/readme/cold.gif" alt="The Chat went cold bar, breathing" width="100%"></p>
 
 **Handoff** writes a summary of the chat and carries on in a clean one. **Quick** takes a few seconds; **Full** checks
-git and saves `HANDOFF.md` (or runs your own skill). Then clear and carry on, clear and wait, or keep the chat and copy.
+git and saves a detailed `HANDOFF.md` under `docs/` (or the project root), at Medium effort, or runs your own skill. An optional field says what the next session is for. Then clear and carry on, clear and wait, or keep the chat and copy.
 
 <p align="center"><img src="docs/readme/handoff.png" alt="The Handoff bar with Quick and Full" width="100%"></p>
 
@@ -227,7 +229,7 @@ Tested on Claude Code 2.1.285 (stable), 2.1.286 and 2.1.288 at 80 and 120 column
 | `/effortless settings` | opens the settings panel |
 | `/effortless setup` | runs the setup again |
 | `/effortless auto` | Auto on or off |
-| `/effortless handoff` / `handoff full` | hands off without the bar, with your last choice of what follows |
+| `/effortless handoff` / `handoff full` [focus] | hands off without the bar, with your last choice of what follows; text after it is what the next session is for |
 | `/effortless stats` | what the prompts Auto steered cost this session, per effort, and what the judge took |
 | `/effortless cold`, `swamp`, `hot`, `down` | shows that bar now, to try it |
 | `/effortless bench` | scores each judge you have on the labelled prompts in [`bench/judge-cases.json`](bench/judge-cases.json) |
