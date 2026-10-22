@@ -24,7 +24,7 @@ https://github.com/user-attachments/assets/9b5af48e-2ad8-4826-9443-4aeea1306664
 >
 > Prefixes: `opencode/<model>` (Zen, free models need no key), `openrouter/<publisher>/<model>`, `typesafe/<model>` (TypeSafe key). Left empty, the fork behaves as upstream. Every call sends your next message (up to 4,000 characters) and the last reply's tail to that provider, so only list providers you are happy to send that to.
 >
-> Install: `claude plugin marketplace add capyBearista/effortless`, then `claude plugin install effortless@capybearista` (uninstall `effortless@effortless` first). Update with `claude plugin marketplace update capybearista` and `claude plugin update effortless@capybearista`.
+> Install: `claude plugin marketplace add capyBearista/effortless#decisions-chain`, then `claude plugin install effortless@capybearista` (uninstall `effortless@effortless` first). Update with `claude plugin marketplace update capybearista` and `claude plugin update effortless@capybearista`.
 
 A Claude Code mod that picks the reasoning effort for every prompt. Quick questions get **Low**, hard jobs get **High**,
 and you never touch the Effort control. On real coding tasks it cut the cost of Opus by **21%** against Anthropic's
