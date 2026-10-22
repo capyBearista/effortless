@@ -1,9 +1,9 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
-import { hopTimeout, MAX_ROUTES, parseDecisionModels } from '../hooks/decisions'
+import { hopTimeout, MAX_ROUTES, movedEarlier, parseDecisionModels, routeLabel, withoutRoute, withRoute } from '../hooks/decisions'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
 import { afterPrompt, currentStep, phaseAtTurnEnd, progressShare, progressShows, progressTitle, soundArgv, stepNumber, stepsFromTodos, withTaskCreated, withTaskUpdated } from '../hooks/progress'
@@ -1425,8 +1425,10 @@ describe('setup guide', () => {
     await start($, on)
     const band = await $.ui.mount(DESK)
     await band.press({ key: 'setup-jev' })
+    // Fork: first where Jev runs; the TypeSafe key is one of three.
+    expect(await drawn(band)).toContain('Where should Jev run?')
+    await band.press({ key: 'setup-typesafe' })
     expect(set).toEqual([])
-    expect(await drawn(band)).toContain('typesafe.ai')
     expect(await drawn(band)).toContain('typesafe.ai')
     expect(await band.find({ key: 'setup-key' })).toBeDefined()
     expect(await band.find({ key: 'setup-haiku' })).toBeUndefined()
@@ -4130,5 +4132,229 @@ describe('decision models (fork)', () => {
 
     expect(calls.length).toBe(0)
     expect(asked.length).toBe(1)
+  })
+})
+
+describe('decision models in the settings and the guide (fork)', () => {
+  const start = async ($: Engine, on: On) => {
+    on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
+    on('command.register', () => ({ value: undefined }) as never)
+    await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
+  }
+  function configSet(on: On) {
+    const set: { key: string; value: unknown }[] = []
+    on('config.set', (_$, e) => {
+      set.push({ key: e.key, value: e.value })
+      return { value: e.value } as never
+    })
+    return set
+  }
+  /** Files under a home folder, read and written by the mod; chmod runs are recorded. */
+  function home(on: On, files: Record<string, string> = {}) {
+    const ran: string[][] = []
+    on('fs.read', (_$, e) => ({ value: files[e.path] ?? '' }) as never)
+    on('fs.write', (_$, e) => {
+      files[e.path] = e.text
+      return { value: undefined } as never
+    })
+    on('process.run', (_$, e) => {
+      ran.push(e.argv)
+      return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
+    })
+    return { files, ran }
+  }
+  function toasts(on: On) {
+    on('ui.toast', () => ({ value: undefined }) as never)
+  }
+  async function openPanel($: Engine) {
+    const guide = await $.ui.mount(DESK_BAND)
+    if (await guide.find({ key: 'setup-close' })) await guide.press({ key: 'setup-close' })
+    await guide.unmount()
+    await $.command.run({ command: 'effortless', args: 'settings' } as never)
+    return $.ui.mount(DESK_BAND)
+  }
+  const ZEN = 'opencode/jev-1.13-free'
+  const MERCURY = 'openrouter/inception/mercury-decide:free'
+
+  test('a setting saved from the panel keeps the decision models: the next prompt still goes to Zen', { options: { decisionModels: ZEN } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    toasts(on)
+    configSet(on)
+    judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    const urls: string[] = []
+    on('http.fetch', (_$, e) => {
+      urls.push(e.url)
+      return { value: { status: 200, ok: true, headers: {}, text: jevReply('high') } }
+    })
+    recordSteps(on)
+    await start($, on)
+    const panel = await openPanel($)
+    await panel.press({ key: 'settings-card-effort' })
+    await panel.press({ key: 'settings-helpers-switch' })
+    await panel.press({ key: 'settings-save' })
+    await panel.unmount()
+
+    await $.prompt.submit({ text: 'refaktorera parsern', wait: false, origin: { kind: 'composer' } })
+    await step($)
+
+    expect(urls.filter(u => u.includes('systemone') || u.includes('decisions'))).toEqual(['https://opencode.ai/zen/v1/systemone'])
+  })
+
+  test('the Judge part shows the chain; Models adds, moves and removes; Save writes the new order', { options: { decisionModels: ZEN } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    toasts(on)
+    home(on)
+    const set = configSet(on)
+    await start($, on)
+    const panel = await openPanel($)
+    expect(await drawn(panel)).toContain('Haiku + 1 model')
+    await panel.press({ key: 'settings-card-judge' })
+    expect(await drawn(panel)).toContain('Zen Jev (free) → Haiku')
+    // Zen needs no key: no key field until an OpenRouter model is listed.
+    expect(await panel.find({ key: 'settings-or-key' })).toBeUndefined()
+    expect(await panel.find({ key: 'settings-key' })).toBeUndefined()
+    await panel.press({ key: 'settings-models-open' })
+    expect(await drawn(panel)).toContain('Judge ›')
+    expect(await drawn(panel)).toContain('OpenCode')
+    await panel.select({ key: 'settings-model-add', value: MERCURY })
+    expect(await drawn(panel)).toContain('2 Mercury (free)')
+    expect(await drawn(panel)).toContain('OpenRouter')
+    await panel.press({ key: `model-earlier-${MERCURY}` })
+    expect(await drawn(panel)).toContain('1 Mercury (free)')
+    await panel.press({ key: `model-remove-${ZEN}` })
+    expect(await panel.find({ key: `model-chip-${ZEN}` })).toBeUndefined()
+    await panel.select({ key: 'settings-model-each', value: '3000' })
+    // Back goes to the Judge part, which now asks for the OpenRouter key.
+    await panel.press({ key: 'settings-back' })
+    expect(await drawn(panel)).toContain('Mercury (free) → Haiku')
+    expect(await panel.find({ key: 'settings-or-key' })).toBeDefined()
+    expect(set).toEqual([])
+    await panel.press({ key: 'settings-save' })
+    expect(set).toContainEqual({ key: 'effortless.decisionModels', value: MERCURY })
+    expect(set).toContainEqual({ key: 'effortless.judgeTimeoutMs', value: '3000' })
+    await panel.unmount()
+  })
+
+  test('an id that is not a model says so and adds nothing', { options: { decisionModels: ZEN } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    toasts(on)
+    await start($, on)
+    const panel = await openPanel($)
+    await panel.press({ key: 'settings-card-judge' })
+    await panel.press({ key: 'settings-models-open' })
+    await panel.select({ key: 'settings-model-add', value: 'other' })
+    await panel.input({ key: 'settings-model-other', text: 'gpt-5' })
+    expect(await drawn(panel)).toContain('Not a model id')
+    // A real id is added and the field goes away.
+    await panel.input({ key: 'settings-model-other', text: 'openrouter/acme/decider' })
+    expect(await drawn(panel)).not.toContain('Not a model id')
+    expect(await panel.find({ key: 'settings-model-other' })).toBeUndefined()
+    expect(await drawn(panel)).toContain('2 OpenRouter acme/decider')
+    await panel.unmount()
+  })
+
+  test('an OpenRouter key pasted in the panel goes to ~/.config/openrouter.env, owner-only, and is used over an older one', { options: { decisionModels: MERCURY, openrouterKey: 'old-k' } } as never, async ($, on) => {
+    engine(on, { HOME: '/h' })
+    mock.clock(on)
+    toasts(on)
+    configSet(on)
+    const { files, ran } = home(on, { '/h/.config/openrouter.env': 'OTHER=1\n' })
+    judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    const auth: (string | undefined)[] = []
+    on('http.fetch', (_$, e) => {
+      auth.push((e.init?.headers as Record<string, string> | undefined)?.authorization)
+      return { value: { status: 200, ok: true, headers: {}, text: jevReply('high') } }
+    })
+    recordSteps(on)
+    await start($, on)
+    const panel = await openPanel($)
+    await panel.press({ key: 'settings-card-judge' })
+    await panel.input({ key: 'settings-or-key', text: ' or-new ' })
+    await panel.press({ key: 'settings-save' })
+    await panel.unmount()
+    expect(files['/h/.config/openrouter.env']).toBe('OTHER=1\nOPENROUTER_API_KEY=or-new\n')
+    expect(ran).toContainEqual(['chmod', '600', '/h/.config/openrouter.env'])
+
+    await $.prompt.submit({ text: 'refaktorera parsern', wait: false, origin: { kind: 'composer' } })
+    await step($)
+    expect(auth.at(-1)).toBe('Bearer or-new')
+  })
+
+  test('Test names the model that answered and the ones that did not', { options: { decisionModels: `openrouter/x/nope, ${ZEN}`, openrouterKey: 'k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    toasts(on)
+    on('http.fetch', (_$, e) =>
+      e.url.includes('openrouter') ? { value: { status: 404, ok: false, headers: {}, text: 'no' } } : { value: { status: 200, ok: true, headers: {}, text: jevReply('low') } })
+    await start($, on)
+    const panel = await openPanel($)
+    await panel.press({ key: 'settings-card-judge' })
+    await panel.press({ key: 'settings-judge-test' })
+    const text = await drawn(panel)
+    expect(text).toContain('Zen Jev (free) answered: low')
+    expect(text).toContain('OpenRouter x/nope: failed (404)')
+    await panel.unmount()
+  })
+
+  test('the guide: Jev on Zen needs no key and sets the chain', async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    toasts(on)
+    const set = configSet(on)
+    await start($, on)
+    const band = await $.ui.mount(DESK_BAND)
+    await band.press({ key: 'setup-jev' })
+    expect(await drawn(band)).toContain('Where should Jev run?')
+    expect(await drawn(band)).toContain('OpenCode')
+    await band.press({ key: 'setup-zen' })
+    expect(await band.find({ key: 'setup-bias2' })).toBeDefined()
+    await band.press({ key: 'setup-close' })
+    expect(set).toContainEqual({ key: 'effortless.decisionModels', value: ZEN })
+    await band.unmount()
+  })
+
+  test('the guide: an OpenRouter key is saved and Jev on OpenRouter follows Zen', async ($, on) => {
+    engine(on, { HOME: '/h' })
+    mock.clock(on)
+    toasts(on)
+    const set = configSet(on)
+    const { files } = home(on)
+    await start($, on)
+    const band = await $.ui.mount(DESK_BAND)
+    await band.press({ key: 'setup-jev' })
+    await band.press({ key: 'setup-openrouter' })
+    expect(await drawn(band)).toContain('openrouter.ai')
+    await band.press({ key: 'setup-back' })
+    expect(await band.find({ key: 'setup-zen' })).toBeDefined()
+    await band.press({ key: 'setup-openrouter' })
+    await band.input({ key: 'setup-or-key', text: 'or-k' })
+    expect(files['/h/.config/openrouter.env']).toBe('OPENROUTER_API_KEY=or-k\n')
+    await band.press({ key: 'setup-close' })
+    expect(set).toContainEqual({ key: 'effortless.decisionModels', value: `${ZEN}, openrouter/typesafe/jev-1.13` })
+    await band.unmount()
+  })
+
+  test('the guide steps: both key steps are step 1 and go back to where Jev runs', () => {
+    expect(setupNext('jev-openrouter')).toBe('lean')
+    expect(setupNext('jev-typesafe')).toBe('lean')
+    expect(setupBack('jev-openrouter')).toBe('jev')
+    expect(setupBack('jev-typesafe')).toBe('jev')
+    expect(setupCounter('jev-openrouter')).toBe('1/4')
+  })
+
+  test('list edits, labels and env lines', () => {
+    expect(withRoute(ZEN, MERCURY)).toBe(`${ZEN}, ${MERCURY}`)
+    expect(withRoute(ZEN, ZEN)).toBe(ZEN)
+    expect(withRoute(ZEN, 'gpt-5')).toBe(ZEN)
+    expect(withoutRoute(`${ZEN}, ${MERCURY}`, ZEN)).toBe(MERCURY)
+    expect(movedEarlier(`${ZEN}, ${MERCURY}`, MERCURY)).toBe(`${MERCURY}, ${ZEN}`)
+    expect(movedEarlier(`${ZEN}, ${MERCURY}`, ZEN)).toBe(`${ZEN}, ${MERCURY}`)
+    expect(routeLabel(parseDecisionModels(MERCURY)[0])).toBe('Mercury (free)')
+    expect(routeLabel(parseDecisionModels('openrouter/acme/decider')[0])).toBe('OpenRouter acme/decider')
+    expect(withEnvLine('A=1\nOPENROUTER_API_KEY=old\n', 'OPENROUTER_API_KEY', 'n$&w')).toBe('A=1\nOPENROUTER_API_KEY=n$&w\n')
+    expect(withEnvLine('A=1', 'OPENROUTER_API_KEY', 'k')).toBe('A=1\nOPENROUTER_API_KEY=k\n')
   })
 })

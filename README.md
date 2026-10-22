@@ -14,7 +14,7 @@ https://github.com/user-attachments/assets/9b5af48e-2ad8-4826-9443-4aeea1306664
 > [!NOTE]
 > **Fork: decision-model chain.** This fork of [HeyCubit/effortless](https://github.com/HeyCubit/effortless) can ask an ordered list of decision models before Haiku, on OpenCode Zen, OpenRouter or TypeSafe. Each failure (error, timeout, unusable answer) passes to the next model; a model with no key is skipped. When none answers, Haiku judges and one toast says why.
 >
-> Set it in `/plugin` → effortless → Configure:
+> Set it up in effortless itself: the setup guide's Jev step offers free Jev on OpenCode Zen, an OpenRouter key or a TypeSafe key, and Settings → Judge → **Models** adds, reorders and removes models. A key pasted there is kept in `~/.config/openrouter.env` (owner-only), since a mod cannot write Claude Code's secret settings. The same options are in `/plugin` → effortless → Configure:
 >
 > | Setting | Example |
 > |---|---|

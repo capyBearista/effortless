@@ -47,8 +47,14 @@ export type SettingsDraft = {
   judge?: string
   handoffAfter?: string
   handoffSkill?: string
-  customUrl?: string
-  customModel?: string
+  /** Fork: the decision models, as the setting's text (comma-separated ids, in the order tried). */
+  decisionModels?: string
+  /** Fork: what is typed in the Models part's "Other…" field, before it is added. */
+  modelOther?: string
+  /** Fork: an OpenRouter key pasted in the panel; saved to ~/.config/openrouter.env, never to the settings. */
+  openrouterKey?: string
+  judgeTimeoutMs?: string
+  judgeBudgetMs?: string
   /** Comma-separated parts switched off: handoff, cold, swamp, hot, down. */
   hide?: string
   key?: string

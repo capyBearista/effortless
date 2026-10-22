@@ -5,7 +5,7 @@ import type { AgentRec, Effort, HandoffAfter, HandoffChoice, ModelKey, Pick, Set
 import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolLine, touchOf, withTouch, withWaits } from './agents'
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
-import { type DecisionRoute, hopTimeout, OPENROUTER_URL, parseDecisionModels, routeName, ZEN_URL } from './decisions'
+import { chainIds, DECISION_PRESETS, type DecisionRoute, hopTimeout, MAX_ROUTES, movedEarlier, OPENROUTER_URL, parseDecisionModels, routeLabel, routeName, withoutRoute, withRoute, ZEN_URL } from './decisions'
 import { accent, setLight, setTheme, themedEls, type ThemeName, THEMES, tintHex } from './theme'
 import { PILL_H, stepsFromTodos, thinkingSvg, THINK_W, withTaskCreated, withTaskUpdated } from './progress'
 
@@ -183,7 +183,7 @@ const installedSkills = atom({ plugin: 'effortless', key: 'installedSkills' } as
 const settingsDraft = atom({ plugin: 'effortless', key: 'settingsDraft' } as const, {})
 const judgeDown = atom({ plugin: 'effortless', key: 'judgeDown' } as const, null)
 // Which part of the settings panel is open: null for the cards.
-type SettingsCard = 'effort' | 'model' | 'judge' | 'handoff' | 'show'
+type SettingsCard = 'effort' | 'model' | 'judge' | 'handoff' | 'show' | 'models'
 const settingsCard = atom({ plugin: 'effortless', key: 'settingsCard' } as const, null)
 /** The settings panel's parts: a card each on the overview, and what the part is for, said once it is open. */
 const CARDS: readonly { id: SettingsCard; title: string; about: string }[] = [
@@ -191,8 +191,12 @@ const CARDS: readonly { id: SettingsCard; title: string; about: string }[] = [
   { id: 'model', title: 'Model', about: "Whether a simple prompt may run on a cheaper model, and which model writes a compaction." },
   { id: 'handoff', title: 'Handoff & alerts', about: 'The full handoff skill, when to suggest compacting, and which alerts show.' },
   { id: 'show', title: 'Customize', about: 'How effortless looks and which parts it shows. Uninstall removes it.' },
-  { id: 'judge', title: 'Judge', about: 'Haiku judges prompts and handoffs. Add Jev for quicker effort calls. Test checks it answers.' },
+  { id: 'judge', title: 'Judge', about: 'Haiku judges prompts and handoffs. Add decision models for quicker effort calls. Test checks they answer.' },
 ]
+/** Fork: the Judge part's own sub-part, opened from it and not on the overview: the decision models, in order. */
+const MODELS_PART = { id: 'models', title: 'Models', about: 'Asked in order until one answers; Haiku judges when none does. ‹ moves one earlier.' } as const
+/** A part's name and what it does, sub-parts included. */
+const partOf = (card: SettingsCard) => (card === 'models' ? MODELS_PART : CARDS.find(c => c.id === card))
 // The Model card: the two ways to run. Effort follows the judge in both.
 const MODEL_CHOICES = [
   { value: 'on', label: 'Cheaper when it can', tag: 'experimental', about: "A simple prompt may run on Haiku or Sonnet. Rarely pays: the other model has to reread the whole chat." },
@@ -231,8 +235,17 @@ const FROST_WIDTH = 440
 const FROST_HEIGHT = 64
 // TypeSafe's mark (from typesafe.ai), drawn beside the Jev button: a Button holds text only.
 const TYPESAFE_MARK = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="18" viewBox="0 0 16.487 24"><style>svg{background:transparent;display:block}</style><path d="M 12.756 2.928 L 12.756 7.067 L 16.486 9.487 L 16.487 18.652 L 8.244 24 L 3.732 21.073 L 3.732 16.82 L 0 14.399 L 0 5.35 L 0.355 5.118 L 8.244 0 Z M 5.94 20.65 L 8.242 22.144 L 14.275 18.227 L 11.975 16.735 Z M 9.022 10.332 L 9.022 14.4 L 5.29 16.822 L 5.29 19.216 L 11.197 15.383 L 11.197 8.921 Z M 12.756 15.384 L 14.928 16.794 L 14.928 10.332 L 12.756 8.922 Z M 2.21 13.976 L 4.511 15.47 L 6.812 13.976 L 4.512 12.485 Z M 1.559 6.193 L 1.559 12.544 L 3.731 11.134 L 3.731 7.066 L 7.464 4.643 L 7.464 2.36 L 1.56 6.193 Z M 5.291 11.132 L 7.463 12.542 L 7.463 10.332 L 5.292 8.921 L 5.292 11.132 Z M 5.94 7.487 L 8.244 8.981 L 10.544 7.488 L 8.244 5.994 Z M 9.024 4.643 L 11.196 6.054 L 11.196 3.774 L 9.024 2.359 Z" fill="#ffffff"/></svg>`
+// Fork: OpenCode's mark (opencode.ai/favicon.svg, its frame and inner block) in white, cropped to the frame, beside Zen.
+const OPENCODE_MARK = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="16" viewBox="128 96 256 320"><style>svg{background:transparent;display:block}</style><path d="M320 224V352H192V224H320Z" fill="#ffffff" opacity=".4"/><path fill-rule="evenodd" clip-rule="evenodd" d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z" fill="#ffffff"/></svg>`
+// Fork: OpenRouter's glyph (openrouter.ai/brand/v2/openrouter-glyph-light.svg) in white, beside OpenRouter.
+const OPENROUTER_MARK = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="12" viewBox="0 0 401.4 293.7"><style>svg{background:transparent;display:block}</style><path d="M303.9475,17.19926c42.79734,0,77.48933,34.69327,77.48933,77.48933s-34.69199,77.48933-77.48933,77.48933l76.86166,76.86244c9.76367,9.76313,2.84903,26.45667-10.95697,26.45667h-220.88335c-71.32686,0-129.14889-57.82202-129.14889-129.14889S77.64197,17.19926,148.96884,17.19926h154.97866ZM148.96884,68.85881c-42.79607,0-77.48933,34.69327-77.48933,77.48933s34.69327,77.48933,77.48933,77.48933,77.48933-34.69327,77.48933-77.48933-34.69327-77.48933-77.48933-77.48933Z" fill="#ffffff"/></svg>`
 // Claude's mark (from claude.ai) in white, drawn beside the Haiku button.
 const CLAUDE_MARK = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 248 248"><style>svg{background:transparent;display:block}</style><path d="M52.4285 162.873L98.7844 136.879L99.5485 134.602L98.7844 133.334H96.4921L88.7237 132.862L62.2346 132.153L39.3113 131.207L17.0249 130.026L11.4214 128.844L6.2 121.873L6.7094 118.447L11.4214 115.257L18.171 115.847L33.0711 116.911L55.485 118.447L71.6586 119.392L95.728 121.873H99.5485L100.058 120.337L98.7844 119.392L97.7656 118.447L74.5877 102.732L49.4995 86.1905L36.3823 76.62L29.3779 71.7757L25.8121 67.2858L24.2839 57.3608L30.6515 50.2716L39.3113 50.8623L41.4763 51.4531L50.2636 58.1879L68.9842 72.7209L93.4357 90.6804L97.0015 93.6343L98.4374 92.6652L98.6571 91.9801L97.0015 89.2625L83.757 65.2772L69.621 40.8192L63.2534 30.6579L61.5978 24.632C60.9565 22.1032 60.579 20.0111 60.579 17.4246L67.8381 7.49965L71.9133 6.19995L81.7193 7.49965L85.7946 11.0443L91.9074 24.9865L101.714 46.8451L116.996 76.62L121.453 85.4816L123.873 93.6343L124.764 96.1155H126.292V94.6976L127.566 77.9197L129.858 57.3608L132.15 30.8942L132.915 23.4505L136.608 14.4708L143.994 9.62643L149.725 12.344L154.437 19.0788L153.8 23.4505L150.998 41.6463L145.522 70.1215L141.957 89.2625H143.994L146.414 86.7813L156.093 74.0206L172.266 53.698L179.398 45.6635L187.803 36.802L193.152 32.5484H203.34L210.726 43.6549L207.415 55.1159L196.972 68.3492L188.312 79.5739L175.896 96.2095L168.191 109.585L168.882 110.689L170.738 110.53L198.755 104.504L213.91 101.787L231.994 98.7149L240.144 102.496L241.036 106.395L237.852 114.311L218.495 119.037L195.826 123.645L162.07 131.592L161.696 131.893L162.137 132.547L177.36 133.925L183.855 134.279H199.774L229.447 136.524L237.215 141.605L241.8 147.867L241.036 152.711L229.065 158.737L213.019 154.956L175.45 145.977L162.587 142.787H160.805V143.85L171.502 154.366L191.242 172.089L215.82 195.011L217.094 200.682L213.91 205.172L210.599 204.699L188.949 188.394L180.544 181.069L161.696 165.118H160.422V166.772L164.752 173.152L187.803 207.771L188.949 218.405L187.294 221.832L181.308 223.959L174.813 222.777L161.187 203.754L147.305 182.486L136.098 163.345L134.745 164.2L128.075 235.42L125.019 239.082L117.887 241.8L111.902 237.31L108.718 229.984L111.902 215.452L115.722 196.547L118.779 181.541L121.58 162.873L123.291 156.636L123.14 156.219L121.773 156.449L107.699 175.752L86.304 204.699L69.3663 222.777L65.291 224.431L58.2867 220.768L58.9235 214.27L62.8713 208.48L86.304 178.705L100.44 160.155L109.551 149.507L109.462 147.967L108.959 147.924L46.6977 188.512L35.6182 189.93L30.7788 185.44L31.4156 178.115L33.7079 175.752L52.4285 162.873Z" fill="#ffffff"/></svg>`
+/** Fork: the mark drawn beside a decision model: its provider's. Each with its own size, as drawn. */
+const providerMark = (route: DecisionRoute) =>
+  route.provider === 'zen' ? { source: OPENCODE_MARK, alt: 'OpenCode', width: 13, height: 16 }
+  : route.provider === 'openrouter' ? { source: OPENROUTER_MARK, alt: 'OpenRouter', width: 16, height: 12 }
+  : { source: TYPESAFE_MARK, alt: 'TypeSafe', width: 12, height: 18 }
 // The band when the context is swamped: murky green, bubbles rising, slow ripples.
 const SWAMP_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="440" height="64" viewBox="0 0 360 30" preserveAspectRatio="xMaxYMid slice"><style>:root{color-scheme:light dark}html,body{margin:0}svg{background:transparent;display:block}.b{fill:none;stroke:#cfe8b8;stroke-width:.5;opacity:0;animation-name:rise;animation-timing-function:ease-in;animation-iteration-count:infinite}@keyframes rise{0%{opacity:0;transform:translate(0,0)}15%{opacity:.7}80%{opacity:.5}100%{opacity:0;transform:translate(3px,-30px)}}.rp{fill:none;stroke:#a7c98f;stroke-width:.4;stroke-linecap:round;opacity:.25;animation:drift 7s ease-in-out infinite}@keyframes drift{0%,100%{transform:translate(0,0);opacity:.15}50%{transform:translate(4px,0);opacity:.4}}.mk{animation:mk 8s ease-in-out infinite}@keyframes mk{0%,100%{opacity:.85}50%{opacity:1}}</style><defs><linearGradient id="bog" x1="0" x2="1"><stop offset=".43" stop-color="#4f7a3a" stop-opacity="0"/><stop offset=".62" stop-color="#4f7a3a" stop-opacity=".16"/><stop offset=".85" stop-color="#6f9a4f" stop-opacity=".32"/><stop offset="1" stop-color="#9cc27a" stop-opacity=".42"/></linearGradient><linearGradient id="silt" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset=".6" stop-color="#2b3a1f" stop-opacity=".18"/><stop offset="1" stop-color="#1c2614" stop-opacity=".45"/></linearGradient><linearGradient id="fade" x1="0" x2="1"><stop offset=".43" stop-color="#fff" stop-opacity="0"/><stop offset=".7" stop-color="#fff" stop-opacity="1"/></linearGradient><mask id="m"><rect width="360" height="30" fill="url(#fade)"/></mask><pattern id="grain" width="2" height="2" patternUnits="userSpaceOnUse"><rect width=".6" height=".6" fill="#fff" fill-opacity=".06"/></pattern></defs><g mask="url(#m)"><rect class="mk" width="360" height="30" fill="url(#bog)"/><rect width="360" height="30" fill="url(#silt)"/><rect width="360" height="30" fill="url(#grain)"/><path class="rp" style="animation-delay:-0s" d="M190 22 q6 -2 12 0 t12 0"/><path class="rp" style="animation-delay:-2.5s" d="M226 9 q6 -2 12 0 t12 0"/><path class="rp" style="animation-delay:-5s" d="M250 18 q6 -2 12 0 t12 0"/><path class="rp" style="animation-delay:-1.5s" d="M300 24 q6 -2 12 0 t12 0"/><path class="rp" style="animation-delay:-3.8s" d="M322 7 q6 -2 12 0 t12 0"/><circle class="b" cx="168" cy="32" r="1.6" style="animation-duration:6.5s;animation-delay:-0s"/><circle class="b" cx="182" cy="32" r="1.1" style="animation-duration:8s;animation-delay:-2.1s"/><circle class="b" cx="197" cy="32" r="2.0" style="animation-duration:7s;animation-delay:-4.2s"/><circle class="b" cx="210" cy="32" r="1.3" style="animation-duration:9s;animation-delay:-1.0s"/><circle class="b" cx="224" cy="32" r="1.7" style="animation-duration:7.5s;animation-delay:-3.3s"/><circle class="b" cx="238" cy="32" r="1.0" style="animation-duration:8.5s;animation-delay:-5.1s"/><circle class="b" cx="252" cy="32" r="1.4" style="animation-duration:6.8s;animation-delay:-2.6s"/><circle class="b" cx="176" cy="32" r="0.9" style="animation-duration:9.5s;animation-delay:-6.0s"/><circle class="b" cx="232" cy="32" r="0.8" style="animation-duration:10s;animation-delay:-0.5s"/></g></svg>`
 // The band when a usage limit is close: embers, sparks rising.
@@ -514,7 +527,12 @@ export function keepsEffort(message: string, context: string): boolean {
 
 /** The TypeSafe key in a ~/.config/jev/.env file's text, the same file the jev-* skills read. */
 export function parseJevKey(text: string): string | undefined {
-  const value = text.match(/^\s*TYPESAFE_API_KEY\s*=\s*(.*?)\s*$/m)?.[1].replace(/^['"]|['"]$/g, '')
+  return parseEnvLine(text, 'TYPESAFE_API_KEY')
+}
+
+/** A NAME=value line's value in an .env file's text, quotes taken off. */
+export function parseEnvLine(text: string, name: string): string | undefined {
+  const value = text.match(new RegExp(`^\\s*${name}\\s*=\\s*(.*?)\\s*$`, 'm'))?.[1].replace(/^['"]|['"]$/g, '')
   return value || undefined
 }
 
@@ -751,24 +769,65 @@ async function askJev($: EngineInterface, key: string, prompt: string, current: 
 /** The key a decision model needs: none on Zen, the OpenRouter key, or the TypeSafe key Jev already uses. */
 async function routeKey($: EngineInterface, route: DecisionRoute): Promise<string | undefined> {
   if (route.provider === 'zen') return undefined
-  if (route.provider === 'openrouter') return config.openrouterKey || (await envOpenRouterKey($)) || undefined
+  if (route.provider === 'openrouter') {
+    // A key pasted in the panel went to the file: it wins over an older one in the settings.
+    if (orKeyFromFile) return (await openRouterFileKey($)) || config.openrouterKey || (await envOpenRouterKey($)) || undefined
+    return config.openrouterKey || (await envOpenRouterKey($)) || (await openRouterFileKey($)) || undefined
+  }
   return jevKey($).catch(() => undefined)
 }
+
+/** Where a pasted OpenRouter key is kept: the app's secret settings cannot be written by a plugin. */
+const OPENROUTER_FILE = '.config/openrouter.env'
+let askOpenRouterFile: EnvAsk | undefined
+// An OpenRouter key was saved from the panel or the guide into OPENROUTER_FILE.
+let orKeyFromFile = false
+/** The key in OPENROUTER_FILE. Only read once an openrouter/ model is asked for or the person opens the panel. */
+async function openRouterFileKey($: EngineInterface): Promise<string | undefined> {
+  askOpenRouterFile =
+    askOpenRouterFile ??
+    (async () => {
+      const home = (await envUserProfile($)) ?? (await envHome($))
+      if (!home) return undefined
+      const text = await $.fs.read(`${home}/${OPENROUTER_FILE}`).catch(() => '')
+      return parseEnvLine(typeof text === 'string' ? text : '', 'OPENROUTER_API_KEY')
+    })()
+  return askOpenRouterFile
+}
+
+/** Whether an OpenRouter key is anywhere the openrouter/ models would find it. */
+async function hasOpenRouterKey($: EngineInterface): Promise<boolean> {
+  return Boolean(config.openrouterKey || (await envOpenRouterKey($)) || (await openRouterFileKey($).catch(() => undefined)))
+}
+
+// The decision model that answered the last prompt, and how fast: for /effortless debug.
+let lastChainAnswer = ''
 
 /**
  * Fork: the decision models in the order set, each until one answers. A failed one passes to the next; a model with
  * no key is skipped without a request. An unsure answer still ends the chain (Haiku decides, as with Jev). The person
  * hears only when none answered, once, with the last reason. Never throws.
  */
-async function askChain($: EngineInterface, prompt: string, current: Pick | null, context: string): Promise<{ judged: Judged; name: string } | undefined> {
+async function askChain(
+  $: EngineInterface,
+  prompt: string,
+  current: Pick | null,
+  context: string,
+  // The panel's Test passes its draft: the models and an OpenRouter key not saved yet.
+  routes: readonly DecisionRoute[] = config.decisionModels,
+  draftOrKey?: string,
+): Promise<{ judged: Judged; name: string; misses: string[] } | undefined> {
   const start = await $.clock.now()
   let failed: string | undefined
   let skipped: string | undefined
-  for (const route of config.decisionModels) {
+  // What happened to each model before the one that answered, in the settings' words: for the panel's Test line.
+  const misses: string[] = []
+  for (const route of routes) {
     const name = routeName(route)
-    const key = await routeKey($, route)
+    const key = route.provider === 'openrouter' && draftOrKey?.trim() ? draftOrKey.trim() : await routeKey($, route)
     if (route.provider !== 'zen' && !key) {
       skipped = skipped ?? `${name} has no key`
+      misses.push(`${routeLabel(route)}: no key`)
       continue
     }
     const timeoutMs = hopTimeout(start, await $.clock.now(), config.judgeTimeoutMs, config.judgeBudgetMs)
@@ -777,14 +836,19 @@ async function askChain($: EngineInterface, prompt: string, current: Pick | null
       break
     }
     const url = route.provider === 'zen' ? ZEN_URL : route.provider === 'openrouter' ? OPENROUTER_URL : ((await envJevUrl($)) ?? JEV_URL)
+    const askedAt = await $.clock.now()
     const asked = await askDecision($, { name, url, model: route.model, key, timeoutMs }, prompt, current, context)
     if ('judged' in asked) {
+      const took = (((await $.clock.now()) - askedAt) / 1000).toFixed(1)
+      lastChainAnswer = `${routeLabel(route)} ${took} s`
       void proof($, `judge: ${name} answered`)
-      return { judged: asked.judged, name }
+      return { judged: asked.judged, name: routeLabel(route), misses }
     }
     void proof($, `judge: ${asked.reason}, next`)
     failed = asked.reason
+    misses.push(`${routeLabel(route)}: ${asked.reason.replace(`${name} `, '')}`)
   }
+  lastChainAnswer = 'none answered, Haiku judged'
   const reason = failed ?? skipped
   if (reason) warnJudge($, reason)
   return undefined
@@ -853,7 +917,7 @@ const JUDGE_TEST_PROMPT = 'rename one variable in a single file'
 
 /** Asks the judge picked in the panel (its unsaved key, URL and model included) one sample prompt, and says in a line
  * whether it answered, with what and how fast, or why not. Never falls back to Haiku: the point is the judge itself. */
-async function testJudge($: EngineInterface, judgeKind: string, draftKey: string): Promise<{ ok: boolean; text: string }> {
+async function testJudge($: EngineInterface, judgeKind: string, draftKey: string, draftChain = chainIds(config.decisionModels), draftOrKey = ''): Promise<{ ok: boolean; text: string }> {
   const start = await $.clock.now()
   const took = async () => `${(((await $.clock.now()) - start) / 1000).toFixed(1)} s`
   const said = (name: string, j: Judged | undefined) =>
@@ -861,9 +925,11 @@ async function testJudge($: EngineInterface, judgeKind: string, draftKey: string
   judgeTesting = {}
   try {
     // Fork: with decision models set, the test walks them as a prompt would and names the one that answered.
-    if (judgeKind !== 'haiku' && config.decisionModels.length) {
-      const chained = await askChain($, JUDGE_TEST_PROMPT, null, '')
-      if (chained) return { ok: true, text: `${said(chained.name, chained.judged)} in ${await took()}` }
+    const routes = parseDecisionModels(draftChain)
+    if (judgeKind !== 'haiku' && routes.length) {
+      const chained = await askChain($, JUDGE_TEST_PROMPT, null, '', routes, draftOrKey)
+      const before = chained?.misses.length ? ` · ${chained.misses.join(' · ')}` : ''
+      if (chained) return { ok: true, text: `${said(chained.name, chained.judged)} in ${await took()}${before}` }
       return { ok: false, text: judgeTesting.reason ?? 'No decision model gave a usable answer' }
     }
     if (judgeKind === 'jev' || judgeKind === 'auto') {
@@ -1898,6 +1964,9 @@ const SETTING_FIELDS = {
   helpers: 'helpers',
   theme: 'theme',
   appearance: 'appearance',
+  decisionModels: 'decisionModels',
+  judgeTimeoutMs: 'judgeTimeoutMs',
+  judgeBudgetMs: 'judgeBudgetMs',
 } as const
 
 async function saveSetting($: EngineInterface, field: keyof typeof SETTING_FIELDS, value: string) {
@@ -1929,9 +1998,13 @@ async function saveSetting($: EngineInterface, field: keyof typeof SETTING_FIELD
     helpers: config.helpers,
     theme: config.theme,
     appearance: config.appearance,
+    decisionModels: chainIds(config.decisionModels),
+    judgeTimeoutMs: String(config.judgeTimeoutMs),
+    judgeBudgetMs: String(config.judgeBudgetMs),
     [SETTING_FIELDS[field]]: value,
   }
-  config = { ...readConfig(raw), typesafeKey: config.typesafeKey }
+  // The keys are the app's secrets: never in raw, kept as they were.
+  config = { ...readConfig(raw), typesafeKey: config.typesafeKey, openrouterKey: config.openrouterKey }
   applyTheme()
   $.ui.invalidate('ui.render')
 }
@@ -1952,15 +2025,18 @@ function savedCardTree($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
 /** Saves every change in the panel's draft, then closes the panel. Nothing changed applies before this. */
 async function saveDraft($: EngineInterface) {
   const draft = await read($, settingsDraft)
-  const { key, ...rest } = draft
-  // The key goes to its file first; the settings then go through the store queue, since each one reloads the plugin.
+  const { key, openrouterKey, modelOther: _typing, ...rest } = draft
+  // The keys go to their files first; the settings then go through the store queue, since each one reloads the plugin.
   if (key?.trim()) await saveJevKey($, key, false)
+  if (openrouterKey?.trim()) await saveOpenRouterKey($, openrouterKey)
   const changes: Record<string, string> = {}
   for (const field of Object.keys(SETTING_FIELDS) as (keyof typeof SETTING_FIELDS)[]) {
     const value = rest[field]
     if (value !== undefined) changes[field] = value
   }
   if (key?.trim() && (changes.judge ?? config.judge) !== 'jev') changes.judge = 'jev'
+  // Models added while Haiku judges alone would never be asked: adding them is asking for them.
+  if (changes.decisionModels && parseDecisionModels(changes.decisionModels).length && (changes.judge ?? config.judge) === 'haiku') changes.judge = 'auto'
   await update($, settingsDraft, () => ({}))
   await update($, settingsOpen, () => false)
   // Said by a card above the prompt, not a toast. Kept in the store: each setting written reloads the plugin.
@@ -1972,9 +2048,47 @@ async function saveDraft($: EngineInterface) {
 
 /** A TYPESAFE_API_KEY line set in an .env file's text: replaced where it is, added where it is not. */
 export function withJevKey(text: string, key: string): string {
-  const line = `TYPESAFE_API_KEY=${key}`
-  if (/^\s*TYPESAFE_API_KEY\s*=.*$/m.test(text)) return text.replace(/^\s*TYPESAFE_API_KEY\s*=.*$/m, line)
+  return withEnvLine(text, 'TYPESAFE_API_KEY', key)
+}
+
+/** A NAME=value line set in an .env file's text: replaced where it is, added where it is not. */
+export function withEnvLine(text: string, name: string, value: string): string {
+  const line = `${name}=${value}`
+  const at = new RegExp(`^\\s*${name}\\s*=.*$`, 'm')
+  if (at.test(text)) return text.replace(at, () => line)
   return `${text}${text && !text.endsWith('\n') ? '\n' : ''}${line}\n`
+}
+
+/**
+ * Fork: an OpenRouter key pasted in the panel or the guide goes to ~/.config/openrouter.env, readable by its owner
+ * only. From then on that file wins over an older key in the settings. Says whether it was saved.
+ */
+async function saveOpenRouterKey($: EngineInterface, key: string): Promise<boolean> {
+  const clean = key.trim()
+  if (!clean) return false
+  const home = (await envUserProfile($)) ?? (await envHome($))
+  if (!home) {
+    $.ui.toast('effortless: no home folder found to save the key in.')
+    return false
+  }
+  const path = `${home}/${OPENROUTER_FILE}`
+  const before = await $.fs.read(path).catch(() => '')
+  try {
+    await $.fs.write(path, withEnvLine(typeof before === 'string' ? before : '', 'OPENROUTER_API_KEY', clean))
+  } catch (error) {
+    $.ui.toast(`effortless: could not save the key: ${(error instanceof Error ? error.message : String(error)).slice(0, 120)}`)
+    return false
+  }
+  // No chmod on Windows: there the file keeps the folder's own access rules.
+  await $.process.run(['chmod', '600', path], { timeoutMs: 5000 }).catch(() => null)
+  await $.store.set('orKeyFromFile', true)
+  orKeyFromFile = true
+  askOpenRouterFile = undefined
+  await update($, judgeDown, () => null)
+  warned.clear()
+  $.ui.toast('effortless: OpenRouter key saved.')
+  $.ui.invalidate('ui.render')
+  return true
 }
 
 /**
@@ -2022,7 +2136,8 @@ async function typesafeKeyAnywhere($: EngineInterface): Promise<string | undefin
   return parseJevKey(typeof text === 'string' ? text : '')
 }
 
-export type SetupStep = 'pick' | 'jev' | 'lean' | 'handoff' | 'look' | 'done'
+// Fork: jev is where Jev runs (Zen, OpenRouter or TypeSafe); jev-openrouter and jev-typesafe take that key.
+export type SetupStep = 'pick' | 'jev' | 'jev-openrouter' | 'jev-typesafe' | 'lean' | 'handoff' | 'look' | 'done'
 
 /** The lean's five stops, cheaper to smarter: a name, and what it does to the judge's pick (see tipped). */
 export const LEAN_STOPS = [
@@ -2035,7 +2150,7 @@ export const LEAN_STOPS = [
 
 /** The guide's step after this one: the judge (with its key or URL), the lean, the handoff, then done. */
 export function setupNext(step: SetupStep): SetupStep | null {
-  if (step === 'pick' || step === 'jev') return 'lean'
+  if (step === 'pick' || step === 'jev' || step === 'jev-openrouter' || step === 'jev-typesafe') return 'lean'
   if (step === 'lean') return 'handoff'
   if (step === 'handoff') return 'look'
   if (step === 'look') return 'done'
@@ -2044,6 +2159,7 @@ export function setupNext(step: SetupStep): SetupStep | null {
 
 /** The step Back goes to: the judge's key or URL goes back to the pick, as does the lean. */
 export function setupBack(step: SetupStep): SetupStep | null {
+  if (step === 'jev-openrouter' || step === 'jev-typesafe') return 'jev'
   if (step === 'jev' || step === 'lean') return 'pick'
   if (step === 'handoff') return 'lean'
   if (step === 'look') return 'handoff'
@@ -2053,7 +2169,7 @@ export function setupBack(step: SetupStep): SetupStep | null {
 
 /** "2/3" for the step shown; the closing step has no number. */
 export function setupCounter(step: SetupStep): string {
-  const n = { pick: 1, jev: 1, lean: 2, handoff: 3, look: 4, done: 0 }[step]
+  const n = { pick: 1, jev: 1, 'jev-openrouter': 1, 'jev-typesafe': 1, lean: 2, handoff: 3, look: 4, done: 0 }[step]
   return n ? `${n}/4` : ''
 }
 
@@ -2084,9 +2200,10 @@ async function flushSetup($: EngineInterface) {
     handoffSkill: config.handoffSkill,
     hide: config.hide.join(','),
     appearance: config.appearance,
+    decisionModels: chainIds(config.decisionModels),
   }
   const changes: Record<string, string> = {}
-  for (const field of ['hide', 'judge', 'bias', 'handoffSkill', 'appearance'] as const) {
+  for (const field of ['hide', 'judge', 'bias', 'handoffSkill', 'appearance', 'decisionModels'] as const) {
     const value = draft[field]
     if (value !== undefined && value.trim() !== saved[field]) changes[field] = value.trim()
   }
@@ -3906,10 +4023,11 @@ export const register: Register = (on, options) => {
     sessionStarted = Date.now()
     // Everything the first draw needs, asked for at once: one after the other they held the start (and with it the
     // band) for a second or more. What the draw does not need runs after, unawaited.
-    const [sid, kept, kff, storedAuto, storedAutoModel, storedPick, setupDone] = await Promise.all([
+    const [sid, kept, kff, orKff, storedAuto, storedAutoModel, storedPick, setupDone] = await Promise.all([
       $.session.id().catch(() => '?'),
       $.store.get('savedSettings').catch(() => null),
       $.store.get('keyFromFile').catch(() => null),
+      $.store.get('orKeyFromFile').catch(() => null),
       $.store.get('isAuto').catch(() => null),
       $.store.get('isAutoModel').catch(() => null),
       $.store.get('pick').catch(() => null) as Promise<Pick | null>,
@@ -3923,6 +4041,7 @@ export const register: Register = (on, options) => {
       applyTheme()
     }
     keyFromFile = kff === true
+    orKeyFromFile = orKff === true
     await Promise.all([
       typeof storedAuto === 'boolean' ? update($, isAuto, () => storedAuto) : null,
       typeof storedAutoModel === 'boolean' ? update($, isAutoModel, () => storedAutoModel) : null,
@@ -4090,6 +4209,7 @@ export const register: Register = (on, options) => {
           `last draw: ${lastRenderBranch || 'none'}`,
           `app sent: ${lastRenderProps || 'nothing'}`,
           `settings open: ${await read($, settingsOpen)}`,
+          `judge: ${config.judge} · models: ${config.decisionModels.length ? `${config.decisionModels.map(routeLabel).join(' → ')} → Haiku` : 'none'} · last answer: ${lastChainAnswer || 'none yet'}`,
           `setup step: ${await read($, setupStep)}`,
           `handoff: ${await read($, handoffStage)}`,
           `last fork: ${lastFork ? `${lastFork.outcome}, ${ago(lastFork.at)}` : 'none'}`,
@@ -4662,7 +4782,16 @@ Saved to ${out}.md and .json` }
         helpers: draft.helpers ?? config.helpers,
         theme: draft.theme ?? config.theme,
         appearance: draft.appearance ?? config.appearance,
+        decisionModels: draft.decisionModels ?? chainIds(config.decisionModels),
+        judgeTimeoutMs: draft.judgeTimeoutMs ?? String(config.judgeTimeoutMs),
+        judgeBudgetMs: draft.judgeBudgetMs ?? String(config.judgeBudgetMs),
       }
+      // Fork: the decision models as the draft has them, and which keys they need.
+      const chain = parseDecisionModels(shown.decisionModels)
+      const needsOpenRouter = chain.some(r => r.provider === 'openrouter')
+      const needsTypesafe = !chain.length || chain.some(r => r.provider === 'typesafe')
+      // The OpenRouter key file is only opened once an openrouter/ model is listed.
+      const hasOrKey = needsOpenRouter ? await hasOpenRouterKey($).catch(() => false) : false
       // The Helpers switch slides like Auto's: the time it flipped, seen by the draw after the click.
       const helpersNow = await $.clock.now()
       if (helpersSeen !== undefined && helpersSeen !== shown.helpers) helpersFlipAt = helpersNow
@@ -4671,15 +4800,20 @@ Saved to ${out}.md and .json` }
       const sameSet = (a: string, b: string) => a.split(',').filter(Boolean).sort().join() === b.split(',').filter(Boolean).sort().join()
       const dirty = Object.entries(draft).some(([field, value]) =>
         value === undefined ? false
-        : field === 'key' ? Boolean(value.trim())
+        : field === 'key' || field === 'openrouterKey' ? Boolean(value.trim())
+        : field === 'modelOther' ? false
         : field === 'hide' ? !sameSet(value, config.hide.join(','))
-        : value !== String(config[field as Exclude<keyof SettingsDraft, 'key' | 'hide'>] ?? ''))
+        : field === 'decisionModels' ? value !== chainIds(config.decisionModels)
+        : value !== String(config[field as Exclude<keyof SettingsDraft, 'key' | 'hide' | 'openrouterKey' | 'modelOther' | 'decisionModels'>] ?? ''))
       const hidden = (draft.hide ?? config.hide.join(',')).split(',').filter(Boolean)
-      const judgeName = shown.judge === 'haiku' ? 'Haiku' : hasKey || shown.judge === 'jev' ? 'Haiku + Jev' : 'Haiku'
+      const judgeName = shown.judge === 'haiku' ? 'Haiku'
+        : chain.length ? `Haiku + ${chain.length} model${chain.length === 1 ? '' : 's'}`
+        : hasKey || shown.judge === 'jev' ? 'Haiku + Jev' : 'Haiku'
       const summaries: Record<SettingsCard, string> = {
         effort: `${BIAS_WORDS[shown.bias + 2]} · ${shown.floor} to ${shown.ceiling}${shown.helpers === 'on' ? ' · helpers' : ''}`,
         model: shown.modelAuto === 'on' ? 'Cheaper when it can' : "Always the chat's",
         judge: tested && tested.ok !== null ? `${judgeName} · ${tested.ok ? 'working' : 'failing'}` : judgeName,
+        models: chain.map(routeLabel).join(' → ') || 'None',
         handoff: `${shown.handoffSkill ? `/${shown.handoffSkill}` : 'Built in'} · compact alert at ${shown.swampAt}%`,
         show: `${shown.layout === 'minimal' ? 'Minimal' : 'Dashboard'} · ${2 - ['timer', 'reason'].filter(h => hidden.includes(h)).length} of 2 on`,
       }
@@ -4794,8 +4928,9 @@ Saved to ${out}.md and .json` }
             ) : (
               <Box key="settings-trail" flexDirection="row" alignItems="center" gap={1}>
                 {/* A real button: a dim "Settings" in a trail did not read as a way back. */}
-                <Button key="settings-back" variant="secondary" label="← Back" onPress={openCard(null)} />
-                <Text color={DASH_TEXT} bold>{CARDS.find(c => c.id === card)?.title}</Text>
+                <Button key="settings-back" variant="secondary" label="← Back" onPress={openCard(card === 'models' ? 'judge' : null)} />
+                {card === 'models' ? <Text dimColor>{'Judge ›'}</Text> : null}
+                <Text color={DASH_TEXT} bold>{partOf(card)?.title}</Text>
               </Box>
             )}
             {dirty ? <Text dimColor> · unsaved changes</Text> : null}
@@ -4878,7 +5013,7 @@ Saved to ${out}.md and .json` }
                   redraw). */}
               <Box position="absolute" top={0} left={0} />
               {/* What the part does; Back and its name are in the top bar's trail. */}
-              <Text dimColor wrap="truncate">{CARDS.find(c => c.id === card)?.about}</Text>
+              <Text dimColor wrap="truncate">{partOf(card)?.about}</Text>
               <Box flexDirection="row" flexWrap="wrap" gap={1} alignItems="center">
                 {card === 'effort' ? [
             <Text key="cheap" dimColor>Cheaper</Text>,
@@ -4913,18 +5048,68 @@ Saved to ${out}.md and .json` }
                     <Text dimColor wrap="truncate">{shown.helpers === 'on' ? "The judge picks each subagent's effort, medium or more" : "Subagents run at the chat's effort"}</Text>
                   </Box>,
                 ]),
-] : card === 'judge' ? (bare ? [] : [
-            pick({ key: "settings-judge-pick", value: shown.judge, options: [{ value: 'auto', label: hasKey ? 'Haiku + Jev' : 'Haiku (Jev if added)' }, { value: 'haiku', label: 'Haiku only' }], onSelect: v => set('judge')(v === 'haiku' ? 'haiku' : 'auto') }),
+] : card === 'models' ? (bare ? [] : [
+            // One chip per model in the order tried: its provider's mark, its place and name, ‹ to try it earlier, ✕.
+            ...chain.map((r, i) => {
+              const mark = providerMark(r)
+              return (
+                <Box key={`model-chip-${r.id}`} flexDirection="row" gap={1} alignItems="center" flexShrink={0}>
+                  {Svg && !term ? <Svg source={mark.source} alt={mark.alt} width={mark.width} height={mark.height} /> : null}
+                  <Text color={DASH_TEXT}>{`${i + 1} ${routeLabel(r)}`}</Text>
+                  {i > 0 ? <Button key={`model-earlier-${r.id}`} plain dimColor label="‹" onPress={() => set('decisionModels')(movedEarlier(shown.decisionModels, r.id))} /> : null}
+                  <Button key={`model-remove-${r.id}`} plain dimColor label="✕" onPress={() => set('decisionModels')(withoutRoute(shown.decisionModels, r.id))} />
+                </Box>
+              )
+            }),
+            ...(chain.length < MAX_ROUTES
+              ? [pick({ key: 'settings-model-add', label: 'Add', value: '-', options: [
+                    // The terminal draws a short list as buttons, where a placeholder would be one more button.
+                    ...(term ? [] : [{ value: '-', label: chain.length ? 'Another model' : 'The first model' }]),
+                    ...DECISION_PRESETS.filter(p => !chain.some(r => r.id === p.id)).map(p => ({ value: p.id, label: p.label })),
+                    { value: 'other', label: 'Other…' },
+                  ], onSelect: (v: string) => v === 'other' ? set('modelOther')(draft.modelOther ?? '') : v !== '-' ? set('decisionModels')(withRoute(shown.decisionModels, v)) : undefined })]
+              : []),
+            // Any other model by its id, checked as it is typed: added on ok, and the field goes away.
+            ...(draft.modelOther !== undefined
+              ? [field('model-other-field', <Input key="settings-model-other" placeholder="openrouter/<publisher>/<model>" value={draft.modelOther}
+                  submitLabel="Add" onInput={set('modelOther')}
+                  onSubmit={async (v: string) => {
+                    // Not a model id: kept in the field, with the line saying why.
+                    if (parseDecisionModels(v).length !== 1) return set('modelOther')(v)
+                    await update($, settingsDraft, d => ({ ...d, decisionModels: withRoute(shown.decisionModels, v), modelOther: undefined }))
+                    $.ui.invalidate('ui.render')
+                  }} />, 34)]
+              : []),
+            ...(draft.modelOther?.trim() && parseDecisionModels(draft.modelOther).length !== 1
+              ? [<Text key="model-other-error" color="#ff8a80" wrap="truncate">Not a model id: use opencode/…, openrouter/…/… or typesafe/…</Text>]
+              : []),
+            pick({ key: 'settings-model-each', label: 'Each', value: shown.judgeTimeoutMs, options: ['2000', '3000', '4000', '6000'].map(ms => ({ value: ms, label: `${Number(ms) / 1000} s` })), onSelect: set('judgeTimeoutMs') }),
+            pick({ key: 'settings-model-all', label: 'In all', value: shown.judgeBudgetMs, options: ['4000', '6000', '8000', '9000'].map(ms => ({ value: ms, label: `${Number(ms) / 1000} s` })), onSelect: set('judgeBudgetMs') }),
+]) : card === 'judge' ? (bare ? [] : [
+            pick({ key: "settings-judge-pick", value: shown.judge, options: [{ value: 'auto', label: chain.length ? 'Haiku + decision models' : hasKey ? 'Haiku + Jev' : 'Haiku (Jev if added)' }, { value: 'haiku', label: 'Haiku only' }], onSelect: v => set('judge')(v === 'haiku' ? 'haiku' : 'auto') }),
             ...(shown.judge !== 'haiku'
-              ? [field('key-field', <Input key="settings-key" placeholder={hasKey ? 'Key saved. Paste to replace' : 'Paste TypeSafe key'}
-                  value={draft.key ?? ''} submitLabel="ok" onInput={set('key')} onSubmit={set('key')} />, 30)]
+              ? [
+                  // The models in the order tried, Haiku last; their own part edits them.
+                  <Box key="settings-chain" flexDirection="row" gap={1} alignItems="center" flexShrink={1} minWidth={0}>
+                    <Text dimColor wrap="truncate">{chain.length ? `${chain.map(routeLabel).join(' → ')} → Haiku` : 'No decision models'}</Text>
+                    <Button key="settings-models-open" variant="secondary" label={chain.length ? 'Models ›' : 'Add models ›'} onPress={openCard('models')} />
+                  </Box>,
+                  ...(needsOpenRouter
+                    ? [field('or-key-field', <Input key="settings-or-key" placeholder={hasOrKey ? 'OpenRouter key saved. Paste to replace' : 'Paste OpenRouter key'}
+                        value={draft.openrouterKey ?? ''} submitLabel="ok" onInput={set('openrouterKey')} onSubmit={set('openrouterKey')} />, 34)]
+                    : []),
+                  ...(needsTypesafe
+                    ? [field('key-field', <Input key="settings-key" placeholder={hasKey ? 'Key saved. Paste to replace' : 'Paste TypeSafe key'}
+                        value={draft.key ?? ''} submitLabel="ok" onInput={set('key')} onSubmit={set('key')} />, 30)]
+                    : []),
+                ]
               : []),
             <Button key="settings-judge-test" variant="secondary" dimColor={tested?.ok === null} label={tested?.ok === null ? 'Testing…' : 'Test'}
               onPress={async () => {
                 if (tested?.ok === null) return
                 await update($, judgeTest, () => ({ ok: null, text: '' }))
                 $.ui.invalidate('ui.render')
-                const result = await testJudge($, shown.judge, draft.key ?? '')
+                const result = await testJudge($, shown.judge, draft.key ?? '', shown.decisionModels, draft.openrouterKey ?? '')
                 await update($, judgeTest, () => result)
                 $.ui.invalidate('ui.render')
               }} />,
@@ -5190,7 +5375,43 @@ Saved to ${out}.md and .json` }
             }} />,
           ),
         ])
+      // Fork: where Jev runs. Zen's free Jev needs no key; OpenRouter and TypeSafe each take theirs in a step of its own.
+      const withMark = (key: string, mark: { source: string; alt: string; width: number; height: number }, button: unknown) => (
+        <Box key={key} flexDirection="row" gap={1} alignItems="center">
+          {Svg ? <Svg source={mark.source} alt={mark.alt} width={mark.width} height={mark.height} /> : null}
+          {button}
+        </Box>
+      )
       if (step === 'jev')
+        return band('Where should Jev run?', 96, [
+          withMark('jev-zen', { source: OPENCODE_MARK, alt: 'OpenCode', width: 13, height: 16 },
+            <Button key="setup-zen" variant="primary" label="Free Jev on OpenCode Zen (no key)" onPress={async () => {
+              await update($, setupDraft, d => ({ ...d, judge: 'auto', decisionModels: 'opencode/jev-1.13-free' }))
+              await goSetup($, 'lean')
+            }} />),
+          withMark('jev-openrouter', { source: OPENROUTER_MARK, alt: 'OpenRouter', width: 16, height: 12 },
+            <Button key="setup-openrouter" variant="secondary" label="Add OpenRouter key" onPress={go('jev-openrouter')} />),
+          withMark('jev-typesafe', { source: TYPESAFE_MARK, alt: 'TypeSafe', width: 12, height: 18 },
+            <Button key="setup-typesafe" variant="secondary" label="TypeSafe key" onPress={go('jev-typesafe')} />),
+          ...nav(<Button key="setup-skip" plain label="Skip" onPress={go('lean')} />),
+        ])
+      if (step === 'jev-openrouter')
+        return band('Key from openrouter.ai:', 52, [
+          <Box key="or-key-field" width={30} flexShrink={1}>
+            <Input key="setup-or-key" placeholder="OpenRouter key" value={draft.openrouterKey ?? ''} submitLabel="Save"
+              onInput={(v: string) => pick('openrouterKey', v)}
+              onSubmit={async (v: string) => {
+                if (!v.trim()) return
+                await update($, setupDraft, d => ({ ...d, openrouterKey: undefined }))
+                if (!(await saveOpenRouterKey($, v))) return
+                // Zen's free Jev first; the same Jev on OpenRouter when Zen does not answer.
+                await update($, setupDraft, d => ({ ...d, judge: 'auto', decisionModels: 'opencode/jev-1.13-free, openrouter/typesafe/jev-1.13' }))
+                await goSetup($, 'lean')
+              }} />
+          </Box>,
+          ...nav(<Button key="setup-skip" plain label="Skip" onPress={go('lean')} />),
+        ])
+      if (step === 'jev-typesafe')
         return band('Key from typesafe.ai:', 52, [
           <Box key="key-field" width={30} flexShrink={1}>
             <Input key="setup-key" placeholder="TypeSafe key" value={draft.key ?? ''} submitLabel="Save"

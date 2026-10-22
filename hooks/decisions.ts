@@ -43,6 +43,43 @@ function routeOf(id: string): DecisionRoute | undefined {
   return undefined
 }
 
+/** The models the settings offer to add, each with the short name it goes by there. Any other id can be typed in. */
+export const DECISION_PRESETS: readonly { id: string; label: string }[] = [
+  { id: 'opencode/jev-1.13-free', label: 'Zen Jev (free)' },
+  { id: 'openrouter/inception/mercury-decide:free', label: 'Mercury (free)' },
+  { id: 'openrouter/microsoft/microsoft-decision-1', label: 'Microsoft decision' },
+  { id: 'openrouter/typesafe/jev-1.13', label: 'Jev on OpenRouter' },
+  { id: 'typesafe/jev-latest', label: 'TypeSafe Jev' },
+]
+
+/** The short name the settings show: a preset's own, else the provider and model. */
+export function routeLabel(route: DecisionRoute): string {
+  return DECISION_PRESETS.find(p => p.id === route.id)?.label ?? routeName(route)
+}
+
+/** Routes back as the setting's text. */
+export function chainIds(routes: readonly DecisionRoute[]): string {
+  return routes.map(r => r.id).join(', ')
+}
+
+/** The setting with one more model at the end, if it is a model id and not there yet. */
+export function withRoute(raw: string, id: string): string {
+  return chainIds(parseDecisionModels(`${raw},${id.trim()}`))
+}
+
+/** The setting without that model. */
+export function withoutRoute(raw: string, id: string): string {
+  return chainIds(parseDecisionModels(raw).filter(r => r.id !== id))
+}
+
+/** The setting with that model one place earlier: tried before the one it passes. */
+export function movedEarlier(raw: string, id: string): string {
+  const routes = parseDecisionModels(raw)
+  const at = routes.findIndex(r => r.id === id)
+  if (at > 0) [routes[at - 1], routes[at]] = [routes[at], routes[at - 1]]
+  return chainIds(routes)
+}
+
 /** The name a route goes by in a toast or a test line. */
 export function routeName(route: DecisionRoute): string {
   if (route.provider === 'zen') return `Zen ${route.model}`
