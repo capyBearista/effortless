@@ -5,7 +5,7 @@ import type { AgentRec, Effort, HandoffAfter, HandoffChoice, ModelKey, Pick, Set
 import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolLine, touchOf, withTouch, withWaits } from './agents'
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
-import { chainIds, DECISION_PRESETS, type DecisionRoute, hopTimeout, MAX_ROUTES, movedEarlier, OPENROUTER_URL, parseDecisionModels, routeLabel, routeName, withoutRoute, withRoute, ZEN_URL } from './decisions'
+import { chainIds, DECISION_PRESETS, type DecisionRoute, hopTimeout, MAX_ROUTES, movedEarlier, OPENROUTER_APP_HEADERS, OPENROUTER_URL, parseDecisionModels, routeLabel, routeName, withoutRoute, withRoute, ZEN_URL } from './decisions'
 import { accent, onKnob, setLight, setMatchApp, setTheme, themedEls, type ThemeName, THEMES, tintHex } from './theme'
 import { PILL_H, stepsFromTodos, thinkingSvg, THINK_W, withTaskCreated, withTaskUpdated } from './progress'
 
@@ -870,6 +870,7 @@ async function askDecision(
     const headers: Record<string, string> = { 'content-type': 'application/json' }
     // Zen's free models take no key; a stray one would go to a server that never asked for it.
     if (ask.key) headers.authorization = `Bearer ${ask.key}`
+    if (ask.url === OPENROUTER_URL) Object.assign(headers, OPENROUTER_APP_HEADERS)
     // A stalled endpoint must not hold the prompt: after the timeout the judge falls through to the next.
     const res = await Promise.race([
       $.http.fetch(ask.url, {

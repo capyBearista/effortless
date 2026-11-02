@@ -3,6 +3,13 @@
 
 export const ZEN_URL = 'https://opencode.ai/zen/v1/systemone'
 export const OPENROUTER_URL = 'https://openrouter.ai/api/alpha/decisions'
+/** Names the app in OpenRouter's logs (else "Unknown"): no app is made without the referer, and hidden (honoured only on
+ * the first request) keeps it out of the public rankings. */
+export const OPENROUTER_APP_HEADERS = {
+  'HTTP-Referer': 'https://github.com/capyBearista/effortless',
+  'X-OpenRouter-Title': 'effortless',
+  'X-OpenRouter-App-Visibility': 'hidden',
+}
 /** More than this many routes could not all be tried inside one prompt's budget anyway. */
 export const MAX_ROUTES = 8
 

@@ -4015,11 +4015,12 @@ describe('decision models (fork)', () => {
   const CHAIN = 'opencode/jev-1.13-free, openrouter/typesafe/jev-1.13'
   /** Answers each decision-model request by its URL, and records what was sent. */
   function decisions(on: On, reply: (url: string) => { status: number; text: string }) {
-    const calls: { url: string; auth?: string; body: Record<string, any> }[] = []
+    const calls: { url: string; auth?: string; headers: Record<string, string>; body: Record<string, any> }[] = []
     on('http.fetch', (_$, e) => {
       calls.push({
         url: e.url,
         auth: (e.init?.headers as Record<string, string> | undefined)?.authorization,
+        headers: (e.init?.headers as Record<string, string> | undefined) ?? {},
         body: JSON.parse(String(e.init?.body)),
       })
       const r = reply(e.url)
@@ -4075,6 +4076,9 @@ describe('decision models (fork)', () => {
     expect(calls[1].auth).toBe('Bearer or-k')
     expect(calls[1].body.model).toBe('typesafe/jev-1.13')
     expect(calls[1].body.questions.effort.type).toBe('choice')
+    // Only OpenRouter is told which app is calling: it names the app in its logs.
+    expect(calls[1].headers).toMatchObject({ 'HTTP-Referer': 'https://github.com/capyBearista/effortless', 'X-OpenRouter-Title': 'effortless', 'X-OpenRouter-App-Visibility': 'hidden' })
+    expect(Object.keys(calls[0].headers).some(h => /referer|openrouter/i.test(h))).toBe(false)
     expect(asked.length).toBe(0)
     expect(said.length).toBe(0)
     expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'max' })
