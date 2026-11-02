@@ -3,6 +3,13 @@
 
 export const ZEN_URL = 'https://opencode.ai/zen/v1/systemone'
 export const OPENROUTER_URL = 'https://openrouter.ai/api/alpha/decisions'
+/** Names the app in OpenRouter's logs (else "Unknown"): no app is made without the referer, and hidden (honoured only on
+ * the first request) keeps it out of the public rankings. */
+export const OPENROUTER_APP_HEADERS = {
+  'HTTP-Referer': 'https://github.com/capyBearista/effortless',
+  'X-OpenRouter-Title': 'effortless',
+  'X-OpenRouter-App-Visibility': 'hidden',
+}
 /** More than this many routes could not all be tried inside one prompt's budget anyway. */
 export const MAX_ROUTES = 8
 
@@ -55,6 +62,11 @@ export const DECISION_PRESETS: readonly { id: string }[] = [
 /** The name the settings show: the model's own id, as its provider knows it (the provider shows as its logo). */
 export function routeLabel(route: DecisionRoute): string {
   return route.model
+}
+
+/** The short name the band's reason line shows: the model id after its publisher, without a :free tag. */
+export function routeShortName(route: DecisionRoute): string {
+  return route.model.slice(route.model.lastIndexOf('/') + 1).replace(/:free$/, '')
 }
 
 /** Routes back as the setting's text. */

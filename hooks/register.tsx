@@ -5,7 +5,7 @@ import type { AgentRec, Effort, HandoffAfter, HandoffChoice, ModelKey, Pick, Set
 import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolLine, touchOf, withTouch, withWaits } from './agents'
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
-import { chainIds, DECISION_PRESETS, type DecisionRoute, hopTimeout, MAX_ROUTES, movedEarlier, OPENROUTER_URL, parseDecisionModels, routeLabel, routeName, withoutRoute, withRoute, ZEN_URL } from './decisions'
+import { chainIds, DECISION_PRESETS, type DecisionRoute, hopTimeout, MAX_ROUTES, movedEarlier, OPENROUTER_APP_HEADERS, OPENROUTER_URL, parseDecisionModels, routeLabel, routeName, routeShortName, withoutRoute, withRoute, ZEN_URL } from './decisions'
 import { accent, onKnob, setLight, setMatchApp, setTheme, themedEls, type ThemeName, THEMES, tintHex } from './theme'
 import { PILL_H, stepsFromTodos, thinkingSvg, THINK_W, withTaskCreated, withTaskUpdated } from './progress'
 
@@ -151,7 +151,6 @@ const cardRunning = (kind: HandoffCard['kind']) => kind === 'writing' || kind ==
 // Kinds that landed well: the card turns green with a checkmark.
 const cardLanded = (kind: HandoffCard['kind']) => kind === 'done' || kind === 'compacted'
 const handoffCard = atom({ plugin: 'effortless', key: 'handoffCard' } as const, null)
-const updateCard = atom({ plugin: 'effortless', key: 'updateCard' } as const, null)
 const HANDOFF_CARD_MS = 2 * 60_000
 // The handoff card's art while it is written: sparkles carried from left to right.
 const HANDOFF_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="440" height="64" viewBox="0 0 360 30" preserveAspectRatio="xMaxYMid slice"><style>:root{color-scheme:light dark}html,body{margin:0}svg{background:transparent;display:block}.d{fill:#d9d1ff;opacity:0;animation-name:go;animation-timing-function:ease-in-out;animation-iteration-count:infinite}@keyframes go{0%{opacity:0;transform:translate(0,0)}15%{opacity:.9}85%{opacity:.7}100%{opacity:0;transform:translate(190px,0)}}.br{animation:br 2.4s ease-in-out infinite}@keyframes br{0%,100%{opacity:.75}50%{opacity:1}}</style><defs><linearGradient id="bg" x1="0" x2="1"><stop offset=".43" stop-color="#7c6cf0" stop-opacity="0"/><stop offset=".7" stop-color="#7c6cf0" stop-opacity=".2"/><stop offset="1" stop-color="#b3a6ff" stop-opacity=".46"/></linearGradient><linearGradient id="fade" x1="0" x2="1"><stop offset=".43" stop-color="#fff" stop-opacity="0"/><stop offset=".7" stop-color="#fff" stop-opacity="1"/></linearGradient><mask id="m"><rect width="360" height="30" fill="url(#fade)"/></mask><pattern id="grain" width="2" height="2" patternUnits="userSpaceOnUse"><rect width=".6" height=".6" fill="#fff" fill-opacity=".07"/></pattern></defs><g mask="url(#m)"><rect class="br" width="360" height="30" fill="url(#bg)"/><circle class="d" cx="170" cy="9.2" r="0.83" style="animation-duration:2.7s;animation-delay:-2.2s"/><circle class="d" cx="170" cy="17.8" r="0.54" style="animation-duration:2.2s;animation-delay:-3.0s"/><circle class="d" cx="170" cy="9.7" r="0.64" style="animation-duration:3.6s;animation-delay:-1.7s"/><circle class="d" cx="170" cy="22.4" r="0.79" style="animation-duration:3.1s;animation-delay:-0.5s"/><circle class="d" cx="170" cy="18.0" r="1.02" style="animation-duration:2.9s;animation-delay:-2.7s"/><circle class="d" cx="170" cy="18.8" r="0.54" style="animation-duration:3.3s;animation-delay:-2.1s"/><circle class="d" cx="170" cy="10.6" r="0.52" style="animation-duration:3.4s;animation-delay:-1.7s"/><circle class="d" cx="170" cy="19.8" r="1.03" style="animation-duration:3.2s;animation-delay:-3.3s"/><circle class="d" cx="170" cy="12.7" r="0.98" style="animation-duration:2.8s;animation-delay:-3.4s"/><circle class="d" cx="170" cy="23.3" r="0.56" style="animation-duration:2.4s;animation-delay:-0.8s"/><circle class="d" cx="170" cy="25.2" r="0.76" style="animation-duration:3.1s;animation-delay:-1.1s"/><circle class="d" cx="170" cy="15.2" r="0.73" style="animation-duration:2.7s;animation-delay:-2.1s"/><circle class="d" cx="170" cy="16.9" r="1.04" style="animation-duration:3.2s;animation-delay:-3.3s"/><circle class="d" cx="170" cy="22.8" r="1.09" style="animation-duration:3.1s;animation-delay:-0.6s"/><rect width="360" height="30" fill="url(#grain)"/></g></svg>`
@@ -345,22 +344,6 @@ const DONE_SVG = BRAND_SVG
   .replace('</g></svg>', '<path d="M323 15.5 L330 22 L345 7.5" fill="none" stroke="#0c3a20" stroke-opacity=".8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g></svg>')
 const DONE_ACCENT = '#7fe0a4'
 const DONE_BG = '#0f1c15'
-// The Updated card: near black, a dim green edge; the green is in its title, the check and the sparkles.
-const UPDATED_BG = '#08090a'
-const UPDATED_EDGE = '#1f4a33'
-// The brand art of the offer card, mirrored to the left and turned green: the landed card keeps its texture and sparkles
-// behind the mark and title, while the links on the right stay on near black.
-const UPDATED_GLOW_SVG = BRAND_SVG
-  .replace('preserveAspectRatio="xMaxYMid slice"', 'preserveAspectRatio="xMinYMid slice"')
-  .replace('</defs>', '</defs><g transform="translate(360 0) scale(-1 1)">').replace('</svg>', '</g></svg>')
-  .replace(/#7c6cf0/g, '#2f9a5e').replace(/#8f7ff0/g, '#3fae6e').replace(/#b3a6ff/g, '#7fe0a4').replace(/#c9bdff/g, '#a8ecc2').replace(/#9a86ff/g, '#4cbf7c')
-  .replace(/stop-opacity="([0-9.]+)"/g, (_m, v: string) => `stop-opacity="${(Number(v) * 0.6).toFixed(3)}"`)
-// The Share icon: an arrow leaving a tray, white like the GitHub mark beside it.
-const SHARE_MARK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16"><path fill="none" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M8 10V1.8M4.8 4.8L8 1.6l3.2 3.2M2.5 8.5v4.8c0 .4.3.7.7.7h9.6c.4 0 .7-.3.7-.7V8.5"/></svg>`
-// A thin vertical line between the links on the Updated card.
-const DIVIDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1" height="18" viewBox="0 0 1 18"><rect width="1" height="18" fill="#ffffff" fill-opacity=".16"/></svg>`
-// Hover on the near-black card: a light veil (the dark one used elsewhere is invisible here).
-const UPDATED_HOVER = '#ffffff1f'
 const DONE_EDGE = '#2f7a4c'
 // The mark in the done green, for the titles of cards that have landed.
 const DONE_MARK_SVG = MARK_SVG.replace(/#7566d8/g, '#2f9a5e').replace(/#a79cf7/g, '#7fe0a4').replace(/#cfc7ff/g, '#c8f4d8')
@@ -841,7 +824,7 @@ async function askChain(
     }
     const url = route.provider === 'zen' ? ZEN_URL : route.provider === 'openrouter' ? OPENROUTER_URL : ((await envJevUrl($)) ?? JEV_URL)
     const askedAt = await $.clock.now()
-    const asked = await askDecision($, { name, url, model: route.model, key, timeoutMs }, prompt, current, context)
+    const asked = await askDecision($, { name, url, model: route.model, key, timeoutMs, label: routeShortName(route) }, prompt, current, context)
     if ('judged' in asked) {
       const took = (((await $.clock.now()) - askedAt) / 1000).toFixed(1)
       lastChainAnswer = `${routeLabel(route)} ${took} s`
@@ -861,7 +844,7 @@ async function askChain(
 /** One decision model, asked once: its verdict, or why not (quiet when it answered in a shape that is not a verdict). */
 async function askDecision(
   $: EngineInterface,
-  ask: { name: string; url: string; model: string; key?: string; timeoutMs: number },
+  ask: { name: string; url: string; model: string; key?: string; timeoutMs: number; label?: string },
   prompt: string,
   current: Pick | null,
   context: string,
@@ -870,6 +853,7 @@ async function askDecision(
     const headers: Record<string, string> = { 'content-type': 'application/json' }
     // Zen's free models take no key; a stray one would go to a server that never asked for it.
     if (ask.key) headers.authorization = `Bearer ${ask.key}`
+    if (ask.url === OPENROUTER_URL) Object.assign(headers, OPENROUTER_APP_HEADERS)
     // A stalled endpoint must not hold the prompt: after the timeout the judge falls through to the next.
     const res = await Promise.race([
       $.http.fetch(ask.url, {
@@ -905,7 +889,7 @@ async function askDecision(
         // No usage in the reply: counted as 0.
       }
       if (await read($, judgeDown)) await update($, judgeDown, () => null)
-      return { judged: { verdict: { ...verdict, by: 'jev' }, tokens: used } }
+      return { judged: { verdict: { ...verdict, by: 'jev', ...(ask.label ? { judgeName: ask.label } : {}) }, tokens: used } }
     }
     return { reason: `${ask.name} gave no usable answer`, quiet: true }
   } catch (error) {
@@ -1380,7 +1364,7 @@ async function toggleSave($: EngineInterface): Promise<string> {
 }
 
 /** Below this a cold cache costs too little to warn about: the next message rereads the chat at full price once. */
-const COLD_MIN_TOKENS = 150_000
+const COLD_MIN_TOKENS = 400_000
 
 /** The context's tokens when the cold band is worth showing: the cache is cold, the band not closed, and the chat big
  * enough that rereading it matters. Null otherwise, and while the size is not known yet. */
@@ -2330,7 +2314,7 @@ async function pickJudge($: EngineInterface, choice: 'haiku' | 'jev') {
   await update($, setupDraft, d => ({ ...d, judge: choice === 'haiku' ? 'auto' : choice }))
   await markSetupDone($)
   if (choice === 'haiku') {
-    $.ui.toast('effortless: Haiku 5.5 judges, no key needed. Add a Jev key later for faster answers.')
+    $.ui.toast('effortless: Haiku 5.5 judges, no key needed. Add a decision model later for faster answers.')
     return goSetup($, 'lean')
   }
   if (choice === 'jev' && (await findTypesafeKey($))) {
@@ -2381,7 +2365,7 @@ export function savedText(raw: Spent): string {
     lines.push(`Helpers: ${helperRuns} subagent${helperRuns === 1 ? '' : 's'} (${per.join(', ')}), ${t.helpers.requests} requests, cost about ${tokens(Math.round(t.helpers.cost))} tokens`)
   }
   if (judged) {
-    lines.push(`Judge: Jev ${t.judge.jev}, Haiku ${t.judge.haiku}, average ${Math.round(t.judge.ms / judged)} ms, ${tokens(t.judge.tokens)} tokens in all`)
+    lines.push(`Judge: decision models ${t.judge.jev}, Haiku ${t.judge.haiku}, average ${Math.round(t.judge.ms / judged)} ms, ${tokens(t.judge.tokens)} tokens in all`)
   }
   return lines.join('\n')
 }
@@ -2512,7 +2496,7 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
       : !effortOf(v, v.modelNow ?? 'sonnet')
         ? 'This model runs without an effort level, so Auto has nothing to set.'
       : [
-          v.current ? `Auto picked ${EFFORT_LABELS[v.current.effort]}${v.current.by !== 'manual' ? ` (${v.current.by})` : ''}` : 'Auto picks the effort for each message',
+          v.current ? `Auto picked ${EFFORT_LABELS[v.current.effort]}${v.current.by !== 'manual' ? ` (${v.current.judgeName ?? v.current.by})` : ''}` : 'Auto picks the effort for each message',
           v.current?.why ? `Why: ${v.current.why}` : '',
           `Lean: ${['much cheaper', 'cheaper', 'as the judge says', 'smarter', 'much smarter'][config.bias + 2]} · range ${config.floor} to ${config.ceiling}`,
         ]
@@ -2787,12 +2771,8 @@ const UNINSTALL_RED = '#ff6b6b'
 function binSvg(color: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><g fill="none" stroke="${color}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.2 3.8H11.8M5.4 3.8V2.4H8.6V3.8M3.4 3.8L4 12H10L10.6 3.8M5.9 6V9.8M8.1 6V9.8"/></g></svg>`
 }
-const GITHUB_MARK = 'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z'
-const GITHUB_MARK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="#ffffff" d="${GITHUB_MARK}"/></svg>`
-const REPO_URL = 'https://github.com/HeyCubit/effortless'
-// GitHub's own dark ground, and the width of the panel that carries the star link on the Updated card.
-const GITHUB_BLACK = '#000000'
-const STAR_PANEL = 32
+/** The fork's repo: bug reports go here (the fork has no site of its own). */
+const REPO_URL = 'https://github.com/capyBearista/effortless'
 function uninstallButton($: EngineInterface, els: ReturnType<EngineInterface['ui']['resolve']>) {
   const { Box, Text, Button, Svg } = els
   const armed = Date.now() - uninstallArmedAt < UNINSTALL_ARM_MS
@@ -2892,48 +2872,10 @@ function handoffCardTree($: EngineInterface, e: RenderInput<'AssistantMessage'> 
   )
 }
 
-/** Where the mod learns of a new version: the newest entry of public.json on main, written only by tools/publish.sh.
- * Releases between publishes (releases.json) reach the dev channel, never this card. */
-// The API, not raw.githubusercontent.com: the raw file sits behind a cache that lagged two releases behind.
-const RELEASES_URL = 'https://api.github.com/repos/HeyCubit/effortless/contents/public.json?ref=main'
-/** Fork: installed from the fork's marketplace (capybearista), where upstream's update card would offer HeyCubit's
- * build over this one. */
-const isForkInstall = ($: EngineInterface) => /[\\/]cache[\\/]capybearista[\\/]/.test($.plugin.root)
-const WHATS_NEW_URL = 'https://heycubit.github.io/effortless/whats-new/'
-/** The site, the link Share copies for a friend. */
-const SITE_URL = 'https://heycubit.github.io/effortless/'
-/** Where a bug is reported: a page on the site that opens a prefilled GitHub issue. */
-const REPORT_BUG_URL = 'https://heycubit.github.io/effortless/report/'
-/** This install's version, read from its plugin.json at session start: the report page fills it in. */
+/** Where a bug is reported: a new issue on the fork, the version filled in. */
+const REPORT_BUG_URL = `${REPO_URL}/issues/new`
+/** This install's version, read from its plugin.json at session start: the bug report fills it in. */
 let ownVersion = ''
-/** How often a session looks for a new version, and how long ✕ on the offer keeps it away. */
-const UPDATE_CHECK_MS = 6 * 3600_000
-const UPDATE_SNOOZE_MS = 24 * 3600_000
-/** How long "Updated" stays above the prompt when nothing else clears it. */
-const UPDATED_CARD_MS = 30_000
-type UpdateCard = { stage: 'offer' | 'updating' | 'done' | 'failed'; version: string; note: string; at: number; detail?: string }
-
-/** Whether version `a` is newer than `b`, both `major.minor.patch`. */
-export function isNewer(a: string, b: string): boolean {
-  const pa = a.split('.').map(Number), pb = b.split('.').map(Number)
-  for (let i = 0; i < 3; i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0)
-  return false
-}
-/** The newest release in releases.json's text (newest first), or nothing when it does not parse. */
-export function latestRelease(text: string): { version: string; note: string } | undefined {
-  try {
-    const list = JSON.parse(text) as { version?: unknown; note?: unknown }[]
-    const top = Array.isArray(list) ? list[0] : undefined
-    if (!top || typeof top.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(top.version)) return undefined
-    return { version: top.version, note: typeof top.note === 'string' ? top.note : '' }
-  } catch {
-    return undefined
-  }
-}
-/** Whether ✕ still keeps `version` away at `now`: the same version, put away less than UPDATE_SNOOZE_MS ago. */
-export function updateSnoozed(hidden: { version: string; at: number } | null, version: string, now: number): boolean {
-  return !!hidden && hidden.version === version && now - hidden.at < UPDATE_SNOOZE_MS
-}
 async function installedVersion($: EngineInterface): Promise<string | undefined> {
   const text = await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`).catch(() => '')
   try {
@@ -2943,42 +2885,6 @@ async function installedVersion($: EngineInterface): Promise<string | undefined>
     return undefined
   }
 }
-/** Looks for a newer version and offers it, unless ✕ put that version away less than UPDATE_SNOOZE_MS ago. */
-// What the last check found, for /effortless update to say (installed, git, web, marketplace).
-let lastUpdateCheck = 'not checked yet'
-/** public.json as it is on stable, read with git: a depth-1 fetch without file contents into a small repo of its own, then
- * the one file. Git has no cache in the way, unlike the host's web fetch, and works on the dev channel too. */
-async function latestFromGit($: EngineInterface): Promise<{ version: string; note: string } | undefined> {
-  const dir = `${$.plugin.root.replace(/[\\/]cache[\\/].*$/, '')}/data/effortless-release-check`
-  const git = (...args: string[]) => $.process.run(['git', '-C', dir, ...args], { timeoutMs: 60_000 })
-  if ((await git('rev-parse', '--git-dir').catch(() => null))?.exitCode !== 0) {
-    await $.process.run(['git', 'init', '-q', dir], { timeoutMs: 30_000 })
-    await git('remote', 'add', 'origin', 'https://github.com/HeyCubit/effortless.git')
-  }
-  const fetched = await git('fetch', '-q', '--depth', '1', '--filter=blob:none', 'origin', 'stable')
-  if (fetched.exitCode !== 0) return undefined
-  const shown = await git('show', 'FETCH_HEAD:public.json')
-  return shown.exitCode === 0 ? latestRelease(shown.stdout) : undefined
-}
-/** The newest public release: from git first; where git is missing or offline, public.json on main over the web and the
- * marketplace's own copy after `claude plugin marketplace update`, whichever is newer. */
-async function latestAvailable($: EngineInterface): Promise<{ latest?: { version: string; note: string }; how: string }> {
-  const fromGit = await latestFromGit($).catch(() => undefined)
-  if (fromGit) return { latest: fromGit, how: `git ${fromGit.version}` }
-  const res = await $.http.fetch(`${RELEASES_URL}&t=${Date.now()}`, { headers: { accept: 'application/vnd.github.raw', 'user-agent': 'effortless' } }).catch((error: unknown) => ({ ok: false, status: 0, text: String(error) }))
-  const fromWeb = res.ok ? latestRelease(res.text) : undefined
-  const web = res.ok ? (fromWeb ? `web ${fromWeb.version}` : 'web: unreadable') : `web refused (${res.status || res.text.slice(0, 80)})`
-  const marketplace = `${$.plugin.root.replace(/[\\/]cache[\\/].*$/, '')}/marketplaces/effortless/public.json`
-  const readLocal = async () => {
-    const text = await $.fs.read(marketplace).catch(() => '')
-    return latestRelease(typeof text === 'string' ? text : '')
-  }
-  // Always refreshed: the host's web fetch can answer from its own cache, git does not.
-  await runClaude($, ['plugin', 'marketplace', 'update', 'effortless'], { timeoutMs: 120_000, env: GITHUB_OVER_HTTPS }).catch(() => null)
-  const local = await readLocal()
-  const best = fromWeb && (!local || !isNewer(local.version, fromWeb.version)) ? fromWeb : local
-  return { latest: best, how: `git failed; ${web}; marketplace ${local?.version ?? 'unreadable'}` }
-}
 /** The session's timers. A reload starts the module over, maybe with no session start (the countdown froze on "Cold"),
  * so the band's first draw starts them too. A session start always starts them: a timer started inside a request may
  * end with it. */
@@ -2986,7 +2892,6 @@ let timersFrom: 'start' | 'draw' | null = null
 function startTimers($: EngineInterface, from: 'start' | 'draw') {
   if (timersFrom === 'start' || (timersFrom === 'draw' && from === 'draw')) return
   timersFrom = from
-  $.clock.every(UPDATE_CHECK_MS, () => void checkUpdate($).catch(() => undefined))
   // The cache countdown's clock. A timer started inside a request ends with that request, so it lives here.
   $.clock.every(CACHE_TICK_MS, () => void showCache($).catch(() => undefined))
   $.clock.every(CACHE_TICK_MS, () => void checkSwamp($).catch(() => undefined))
@@ -3022,74 +2927,13 @@ function startTimers($: EngineInterface, from: 'start' | 'draw') {
 
 // /reload-plugins loads the module again without a session start, so the band's first draw runs afterLoad too.
 let loadChecked = false
-/** Once per load: "Updated" when this load is the version the card installed, then a look for a newer one. */
+/** Once per load: this load's version, and the timers. */
 async function afterLoad($: EngineInterface) {
   if (loadChecked) return
   loadChecked = true
   // A reload has no session start, so this load reads its own version here too.
   ownVersion = (await installedVersion($)) ?? ownVersion
   startTimers($, 'draw')
-  const updatedTo = (await $.store.get('updatedTo').catch(() => null)) as { version: string; note: string; at: number } | null
-  // A "Loading it…" left by the copy before this load is over either way.
-  await update($, updateCard, c => (c && c.detail === UPDATE_LOADING ? { ...c, detail: 'Installed. Open a new chat to load it.' } : c))
-  if (updatedTo) {
-    await $.store.set('updatedTo', null)
-    // The reload brought back older code (the chat's folder was not refreshed): the old code's timer died with the
-    // reload, so the card would say "Loading it…" for good. Say what to do instead.
-    const loaded = (await installedVersion($)) === updatedTo.version
-    await update($, updateCard, () => ({ stage: 'done', version: updatedTo.version, note: updatedTo.note, at: Date.now(), ...(loaded ? {} : { detail: 'Installed. Open a new chat to load it.' }) }))
-  }
-  await checkUpdate($)
-}
-async function checkUpdate($: EngineInterface) {
-  // Fork: upstream's releases would offer to replace this build with HeyCubit's; it updates with git pull instead.
-  if (isForkInstall($)) {
-    lastUpdateCheck = 'fork build: update it with git pull in its clone'
-    return
-  }
-  const shown = await read($, updateCard)
-  if (shown && shown.stage !== 'offer') {
-    lastUpdateCheck = `skipped while the ${shown.stage} card shows`
-    return
-  }
-  const { latest, how } = await latestAvailable($)
-  const mine = await installedVersion($)
-  lastUpdateCheck = `installed ${mine ?? 'unreadable'}; ${how}`
-  if (!latest || !mine || !isNewer(latest.version, mine)) {
-    if (shown) await update($, updateCard, () => null)
-    // A version found earlier is stale once this one is as new (installed some other way): the button looks again.
-    await update($, updateCheck, cur => (cur.startsWith('found ') ? 'idle' : cur))
-    return
-  }
-  const now = await $.clock.now()
-  const hidden = (await $.store.get('updateHidden').catch(() => null)) as { version: string; at: number } | null
-  if (updateSnoozed(hidden, latest.version, now)) return
-  if (shown?.version !== latest.version) await update($, updateCard, () => ({ stage: 'offer', version: latest.version, note: latest.note, at: now }))
-}
-// The Settings header's "Check for updates": idle, checking, up to date, or the version found (then the button installs it).
-const updateCheck = atom({ plugin: 'effortless', key: 'updateCheck' } as const, 'idle')
-/** Looks now, ignoring a Later pressed earlier (asking is a decision to look), and says what it found in the button. */
-async function checkUpdateNow($: EngineInterface) {
-  await update($, updateCheck, () => 'checking')
-  await $.store.set('updateHidden', null).catch(() => undefined)
-  // An Updated or failed card left from earlier made checkUpdate skip the look and the button said Up to date.
-  await update($, updateCard, c => (c && (c.stage === 'done' || c.stage === 'failed') ? null : c))
-  await checkUpdate($).catch((error: unknown) => { lastUpdateCheck = `check failed: ${String(error).slice(0, 120)}` })
-  const card = await read($, updateCard)
-  await update($, updateCheck, () => (card && card.stage === 'offer' ? `found ${card.version}` : 'newest'))
-  // "Up to date" goes back to the button after a few seconds; a found version stays until it is installed or put away.
-  if (!(card && card.stage === 'offer')) $.clock.after(5000, () => void update($, updateCheck, cur => (cur === 'newest' ? 'idle' : cur)))
-}
-// The repo is public, so HTTPS needs no key (only this repo's address is rewritten). Without it, git reaches GitHub
-// over SSH and fails for anyone with no SSH key there ("make sure you have the correct access rights").
-const GITHUB_OVER_HTTPS = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'url.https://github.com/HeyCubit/.insteadOf', GIT_CONFIG_VALUE_0: 'git@github.com:HeyCubit/' }
-/** The line of a failed `claude plugin` run that says what went wrong: git's own `fatal:`/`error:` line, else the
- * CLI's ✘ line, else the last line. The last line alone was often the tail of a wrapped sentence. */
-export function updateFailure(output: string): string {
-  const lines = output.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-  const line = lines.find(l => /^(fatal|error):/i.test(l)) ?? lines.find(l => l.startsWith('✘')) ?? lines.at(-1) ?? ''
-  const why = line.replace(/^(fatal|error):\s*/i, '').replace(/^✘\s*/, '')
-  return why.length > 160 ? `${why.slice(0, 159)}…` : why
 }
 /**
  * Where `claude` may be: on PATH, then where the official installers put it. The desktop app starts with the PATH it
@@ -3123,168 +2967,9 @@ async function runClaude($: EngineInterface, args: string[], opts: Parameters<En
   }
   throw last
 }
-/** Update pressed: the marketplace and the plugin are updated as `claude plugin` does, then the plugins reloaded so
- * the new version runs in this chat. The new module shows "Updated" (see session.start). */
-async function runUpdate($: EngineInterface, card: UpdateCard) {
-  await update($, updateCard, () => ({ ...card, stage: 'updating' }))
-  const step = async (args: string[]) => {
-    const r = await runClaude($, args, { timeoutMs: 180_000, env: GITHUB_OVER_HTTPS })
-    if (r.exitCode !== 0) throw new Error(updateFailure(r.stderr || r.stdout) || `claude ${args.join(' ')} failed`)
-  }
-  try {
-    // This install's own marketplace: effortless for users, effortless-dev on the dev channel.
-    await step(['plugin', 'marketplace', 'update', pluginId($).split('@')[1]])
-    await step(['plugin', 'update', pluginId($)])
-  } catch (error) {
-    const message = String(error instanceof Error ? error.message : error)
-    // No CLI anywhere (a desktop-only install): say what to install, not the engine's ENOENT.
-    const home = await homeDir($)
-    await update($, updateCard, () => ({ ...card, stage: 'failed', detail: noClaudeHint(message, home) ?? message }))
-    return
-  }
-  // The desktop app keeps this chat on the folder it started with, and a reload reads that folder again: so the new
-  // version's files go into it, or the reload would bring back the old code.
-  await syncRunningCopy($).catch(() => undefined)
-  const now = await $.clock.now()
-  await $.store.set('updatedTo', { version: card.version, note: card.note, at: now })
-  // Installed, not yet running: only the new code, once loaded, says "Loaded in this chat" (afterLoad).
-  await update($, updateCard, () => ({ ...card, stage: 'done', at: now, detail: UPDATE_LOADING }))
-  // The reload loads the new version here; where the app takes no command from a plugin, it is typed for Enter.
-  const reloaded = await $.command.run({ command: 'reload-plugins', args: RELOAD_ARGS } as never).then(() => true, () => false)
-  if (!reloaded && (await typeCommand($, `/reload-plugins ${RELOAD_ARGS}`)))
-    await update($, updateCard, c => (c ? { ...c, detail: 'Press Enter to load it' } : c))
-  // Still this code's words after a while: the reload did not load the new version, so a new chat has to.
-  $.clock.after(UPDATE_LOAD_WAIT_MS, () => void update($, updateCard, c => (c && c.at === now && c.detail === UPDATE_LOADING ? { ...c, detail: 'Installed. Open a new chat to load it.' } : c)))
-}
-/** The command that puts the installed version's files over the running copy, or nothing when they are the same folder or
- * either is not a plugin cache folder (a working copy is never written over). */
-export function syncPlan(running: string, installed: string | undefined): string[] | undefined {
-  const norm = (x: string) => x.replace(/[\\/]+$/, '').replaceAll('\\', '/')
-  const cached = (x: string) => /\/cache\//.test(norm(x))
-  if (!installed || norm(installed) === norm(running) || !cached(installed) || !cached(running)) return undefined
-  return /^[A-Za-z]:|\\/.test(running)
-    ? ['robocopy', installed, running, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP']
-    : ['cp', '-R', `${installed}/.`, running]
-}
-/** Copies the files of the version just installed into the folder this chat runs from, when the two differ. A failed
- * copy leaves the reload as it was. */
-async function syncRunningCopy($: EngineInterface) {
-  const home = $.plugin.root.replace(/[\\/]cache[\\/].*$/, '')
-  const record = JSON.parse(String(await $.fs.read(`${home}/installed_plugins.json`))) as { plugins?: Record<string, { installPath?: unknown }[]> }
-  const installed = record.plugins?.[pluginId($)]?.map(x => x.installPath).filter((x): x is string => typeof x === 'string').at(-1)
-  const argv = syncPlan($.plugin.root, installed)
-  if (!argv) return
-  const r = await $.process.run(argv, { timeoutMs: 120_000 })
-  // robocopy answers below 8 when it copied (1 = files copied).
-  if (argv[0] === 'robocopy' ? r.exitCode >= 8 : r.exitCode !== 0) throw new Error(`copy failed (${r.exitCode})`)
-}
-// The reload is queued until Claude is idle: pressed mid-reply, it waits for the reply to finish.
-const UPDATE_LOADING = 'Installed. Loads as soon as Claude is idle.'
 /** A plain /reload-plugins holds back a change that would make the next message re-read the chat without the cache
- * (new commands do), says "installed but not applied" and keeps the old code running. Update was pressed: apply it. */
+ * (new commands do), says "installed but not applied" and keeps the old code running. Uninstall was pressed: apply it. */
 export const RELOAD_ARGS = '--force'
-const UPDATE_LOAD_WAIT_MS = 15_000
-/** The update card above the prompt: the offer, the moving art while it updates, green once done. */
-function updateCardTree($: EngineInterface, e: RenderInput<'AbovePrompt'>, card: UpdateCard) {
-  const { Box, Text, Svg, Button, Link } = themedEls($.ui.resolve(e))
-  const landed = card.stage === 'done'
-  const words = {
-    offer: [`✦ effortless ${card.version} is out`, card.note || 'A new version is ready.'],
-    updating: ['✦ Updating…', `Getting ${card.version}. Takes a few seconds.`],
-    done: [`✦ Updated to ${card.version}`, card.detail ?? 'Loaded in this chat.'],
-    failed: ['✦ Update failed', card.detail ?? 'Try again, or run claude plugin update effortless@effortless.'],
-  }[card.stage]
-  const share = async () => {
-    const r = await $.ui.copy({ text: SITE_URL, surface: e.surface }).catch(() => ({ isCopied: false as const }))
-    $.ui.toast(r.isCopied ? 'Link copied. Send it to a friend.' : 'effortless: could not copy the link')
-  }
-  const hide = async () => {
-    if (card.stage === 'offer') await $.store.set('updateHidden', { version: card.version, at: await $.clock.now() })
-    await update($, updateCard, () => null)
-  }
-  const divider = (key: string) => (
-    <Box key={key} flexShrink={0} marginX={1}>
-      <Svg source={DIVIDER_SVG} alt="divider" width={1} height={18} />
-    </Box>
-  )
-  // Each control in a box of its own: under one shared box, hovering one lit the other too.
-  const own = (key: string, el: unknown) => (
-    <Box key={key} position="relative" flexShrink={0}>
-      <Box position="absolute" top={0} left={0} />
-      {el as never}
-    </Box>
-  )
-  const installLine = card.stage === 'failed' ? card.detail?.match(/(irm \S+ \| iex|curl -fsSL \S+ \| bash)/)?.[1] : undefined
-  // The offer is Update or Later (Later puts this version away for a day); "Updated" has the link and a ✕; a failed
-  // update has Try again and ✕. Nothing while it runs.
-  const controls =
-    card.stage === 'offer'
-      ? [
-          own('update-go-box', <Button key="update-go" variant="primary" label="Update" onPress={() => runUpdate($, card)} />),
-          own('update-later-box', <Button key="update-later" variant="secondary" label="Later" onPress={hide} />),
-        ]
-      : card.stage === 'failed'
-        ? [
-            // No CLI: the install line can be cut off on a narrow card, so it is a press away whole.
-            ...(installLine
-              ? [own('update-copy-box', <Button key="update-copy" variant="secondary" label="Copy install command" onPress={async () => {
-                  const r = await $.ui.copy({ text: installLine, surface: e.surface }).catch(() => ({ isCopied: false as const }))
-                  $.ui.toast(r.isCopied ? 'Install command copied. Paste it in PowerShell or Terminal, then reopen the app.' : `effortless: run ${installLine}`)
-                }} />)]
-              : []),
-            own('update-go-box', <Button key="update-go" variant="primary" label="Try again" onPress={() => runUpdate($, card)} />),
-            own('update-close-box', <Button key="update-close" plain label="✕" hover={{ backgroundColor: CARD_CLOSE_HOVER }} onPress={hide} />),
-          ]
-        : landed
-          ? [
-              // White and bold: the app's blue link was hard to see on the green and the check.
-              own('update-link-box', <Text color="#ffffff" bold><Link href={WHATS_NEW_URL} label="What's new →" /></Text>),
-              divider('update-div-1'),
-              own('update-share-box', (
-                // The icon and the word, with a blank button laid over both: its hover veil covers the icon too.
-                <Box key="update-share" position="relative" flexDirection="row" alignItems="center" gap={1} paddingX={1} flexShrink={0}>
-                  <Svg source={SHARE_MARK_SVG} alt="Share" width={14} height={14} />
-                  <Text>Share</Text>
-                  <Box position="absolute" top={0} bottom={0} left={0} right={0} alignItems="center" justifyContent="center">
-                    <Button key="update-share-go" plain hover={{ backgroundColor: UPDATED_HOVER }} label={' '.repeat(23)} onPress={share} />
-                  </Box>
-                </Box>
-              )),
-              divider('update-div-2'),
-              own('update-star-box', (
-                <Box key="update-star" flexDirection="row" alignItems="center" gap={1}>
-                  <Svg source={GITHUB_MARK_SVG} alt="GitHub" width={14} height={14} />
-                  <Link href={REPO_URL} label="Star on GitHub" />
-                </Box>
-              )),
-              own('update-close-box', <Button key="update-close" plain label="✕" hover={{ backgroundColor: UPDATED_HOVER }} onPress={hide} />),
-            ]
-          : []
-  return (
-    <Box key="update-card" position="relative" flexDirection="row" alignItems="center" paddingX={1} overflow="hidden"
-      backgroundColor={landed ? UPDATED_BG : BRAND_BG} borderStyle="round" borderColor={landed ? UPDATED_EDGE : BRAND_EDGE}>
-      {landed ? (
-        <Box key="update-glow" position="absolute" top={-1} left={0} bottom={-1}>
-          <Svg source={UPDATED_GLOW_SVG} alt="effortless" width={FROST_WIDTH * 2} height={FROST_HEIGHT * 2} />
-        </Box>
-      ) : (
-        <Box key="update-art" position="absolute" top={-1} right={0} bottom={-1}>
-          <Svg source={card.stage === 'updating' ? HANDOFF_SVG : BRAND_SVG} alt={card.stage === 'updating' ? 'updating' : 'effortless'} width={FROST_WIDTH * 2} height={FROST_HEIGHT * 2} />
-        </Box>
-      )}
-      <Box key="update-words" position="relative" flexDirection="column" flexShrink={1} minWidth={0}>
-        {markTitle({ Box, Text, Svg }, 'update-title', landed ? DONE_ACCENT : ACCENT, words[0], landed ? DONE_MARK_SVG : MARK_SVG)}
-        <Text wrap="truncate">{words[1]}</Text>
-      </Box>
-      <Box key="update-controls" position="relative" flexGrow={1} flexDirection="row" justifyContent="flex-end" alignItems="center" gap={1}>
-        {/* Positioned by an empty absolute child, so it paints over the art and takes the clicks. */}
-        <Box position="absolute" top={0} left={0} />
-        {controls}
-      </Box>
-    </Box>
-  )
-}
-
 /** How long "Compact complete" stays above the prompt when nothing else clears it. */
 const COMPACT_CARD_MS = 20_000
 /** A settings part's body on desktop is as tall as the overview's row of cards, so the panel keeps its height going in
@@ -3417,7 +3102,7 @@ const KIND_SLIDE_DELAY_MS = 70
 let kindFlipAt = 0
 /** How long the bar's edges glow after Auto is switched on. */
 const AUTO_GLOW_MS = 2600
-const AUTO_GLOW_W = 760
+const AUTO_GLOW_W = 1100
 const AUTO_GLOW_H = 37
 /** The image starts inside the band's side borders but over its top and bottom ones (the layer's top and bottom are the
  * band's outer edge, its sides the inner), so the line is inset 0.75 px at the sides and 1.75 px at top and bottom: 1 px
@@ -3429,7 +3114,7 @@ const AUTO_GLOW_H = 37
 /** The cold band's rim: the Auto glow's light in ice, breathing slowly for as long as the band shows, so a cold chat
  * looks alive rather than parked. Placed by the clock (inPhase), so a redraw picks up where the breath was. */
 const COLD_GLOW_MS = 4200
-/** This install's id: effortless@effortless for users, effortless@effortless-dev on the dev channel. Read off the
+/** This install's id: effortless@capybearista for this fork. Read off the
  * cache path (…/plugins/cache/<marketplace>/effortless/<version>). */
 const pluginId = ($: EngineInterface) => `effortless@${$.plugin.root.match(/cache[\\/]([^\\/]+)[\\/]/)?.[1] ?? 'effortless'}`
 
@@ -3548,7 +3233,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   const effortNow = effortOf(v, v.modelNow ?? (await sessionModel($)))
   const by = v.current?.by
   const reason = v.current
-    ? `${by === 'manual' || by === 'named' ? 'You' : by === 'jev' ? 'Jev' : 'Haiku'}: ${v.current.why}`
+    ? `${by === 'manual' || by === 'named' ? 'You' : by === 'jev' ? (v.current.judgeName ?? 'Jev') : 'Haiku'}: ${v.current.why}`
     : v.auto
       ? 'Auto picks the effort at the next prompt'
       : 'You pick the effort'
@@ -3831,7 +3516,7 @@ async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opt
     : notAligned
       ? `/effort shows ${EFFORT_LABELS[shownByApp as Effort] ?? shownByApp}`
       : current
-        ? `${current.by === 'manual' ? 'You' : current.by === 'jev' ? 'Jev' : 'Haiku'}: ${current.why}`
+        ? `${current.by === 'manual' ? 'You' : current.by === 'jev' ? (current.judgeName ?? 'Jev') : 'Haiku'}: ${current.why}`
         : auto
           ? 'Picks the effort at the next prompt'
           : 'Pick an effort'
@@ -4196,30 +3881,6 @@ export const register: Register = (on, options) => {
     if (e.command !== 'effortless' && e.command !== 'effortless:effortless') return next(e)
     const wanted = await read($, suggestion)
     const arg = e.args.trim().toLowerCase()
-    // /effortless card offer|updating|done|failed: draws that update card with made-up text, to look at it before a publish.
-    if (arg.startsWith('card')) {
-      const stage = arg.slice(4).trim() || 'done'
-      const stages = ['offer', 'updating', 'done', 'failed']
-      if (stage === 'off') {
-        await update($, updateCard, () => null)
-        return { text: 'The preview card is gone.' }
-      }
-      if (!stages.includes(stage)) return { text: 'Use /effortless card offer, updating, done, failed or off.' }
-      const version = (await installedVersion($)) ?? '1.0.0'
-      await update($, updateCard, () => ({
-        stage: stage as UpdateCard['stage'], version, note: 'A short release note, as users see it.', at: Date.now(),
-        ...(stage === 'failed' ? { detail: 'A made-up failure, for the look of the card.' } : {}),
-      }))
-      $.ui.invalidate('ui.render')
-      return { text: `The update card shows its "${stage}" look (a preview). /effortless card off clears it.` }
-    }
-    if (arg === 'update') {
-      await checkUpdate($).catch(() => undefined)
-      const card = await read($, updateCard)
-      if (!card || card.stage === 'done') return { text: `effortless ${(await installedVersion($)) ?? ''} is the newest (${lastUpdateCheck}).` }
-      void runUpdate($, card)
-      return { text: `Updating to ${card.version}…` }
-    }
     if (arg === 'agents' || arg === 'agents demo') {
       if (arg === 'agents demo') {
         const now = await $.clock.now()
@@ -4245,7 +3906,7 @@ export const register: Register = (on, options) => {
     }
     if (arg === 'down') {
       await update($, judgeDownHidden, () => null)
-      await update($, judgeDown, () => 'Jev is out of credits (402)')
+      await update($, judgeDown, () => 'A decision model is out of credits (402)')
       $.ui.invalidate('ui.render')
       return { text: 'The judge-down band is showing now (a test). It goes away once the judge answers again.' }
     }
@@ -4835,7 +4496,6 @@ Saved to ${out}.md and .json` }
       const skillNames = await read($, installedSkills)
       const hasKey = Boolean(await jevKey($).catch(() => undefined)) || Boolean(await typesafeKeyAnywhere($).catch(() => undefined))
       // A plain button with its own handler: a dismiss-role button may be taken by the app before onPress runs.
-      const checking = await read($, updateCheck)
       const close = async () => {
         await update($, settingsDraft, () => ({}))
         await update($, judgeTest, () => null)
@@ -4981,7 +4641,7 @@ Saved to ${out}.md and .json` }
       const headRow = (kids: unknown[]) => term
         ? <Box key="settings-head" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>{kids}</Box>
         : kids
-      const bugUrl = ownVersion ? `${REPORT_BUG_URL}?effortless=${encodeURIComponent(ownVersion)}` : REPORT_BUG_URL
+      const bugUrl = ownVersion ? `${REPORT_BUG_URL}?body=${encodeURIComponent(`effortless ${ownVersion}`)}` : REPORT_BUG_URL
       return (
         // The dashboard's look: the neutral band and its quiet edge, purple only on the star, no art behind the rows (it
         // made them busy). The entrance
@@ -4993,7 +4653,7 @@ Saved to ${out}.md and .json` }
           {!term ? (
             <Box key="settings-bar" position="absolute" top={-1} left={0} right={0} height={3.5} overflow="hidden" backgroundColor={DASH_HEAD}>
               {/* The mark, big, tilted and cut off by the bar's edges, in the gap between the title and the buttons: behind
-                  "Check for updates" it made the button hard to read. */}
+                  the buttons it made them hard to read. */}
               <Box key="settings-bar-mark" position="absolute" top={-2} right={48} marginTop={1}>
                 <Svg source={SETTINGS_MARK} alt="effortless mark" width={140} height={140} />
               </Box>
@@ -5005,7 +4665,7 @@ Saved to ${out}.md and .json` }
           ) : null}
           {/* Title and buttons are centred in the whole bar (it reaches from the border to the line under it), so the
               space above them equals the space below. The terminal has no bar: both sit in the flow on one row that
-              wraps, since two absolute layers drew over each other in a narrow window ("SettCheck for updates"). */}
+              wraps, since two absolute layers drew over each other in a narrow window. */}
           {headRow([
           <Box key="settings-title" {...(term ? { flexShrink: 0 } : { position: 'absolute', top: 0, left: 2, height: 2.5 })} flexDirection="row" alignItems="center" gap={1}>
             {term ? <Text color={ACCENT} bold>✦</Text> : null}
@@ -5025,20 +4685,6 @@ Saved to ${out}.md and .json` }
             {dirty ? <Text dimColor> · unsaved changes</Text> : null}
           </Box>,
           <Box key="settings-actions" {...(term ? { flexShrink: 1, flexWrap: 'wrap', columnGap: 2 } : { position: 'absolute', top: 0, right: 2, height: 2.5, gap: 2 })} flexDirection="row" alignItems="center">
-            {checking === 'checking' ? (
-              <Text dimColor>Checking…</Text>
-            ) : checking === 'newest' ? (
-              <Text dimColor>✓ Up to date</Text>
-            ) : checking.startsWith('found ') && (!ownVersion || isNewer(checking.slice(6), ownVersion)) ? (
-              <Button key="settings-update" variant="primary" label={`Update to ${checking.slice(6)}`} onPress={async () => {
-                const card = await read($, updateCard)
-                await update($, updateCheck, () => 'idle')
-                if (card) void runUpdate($, card)
-                await close()
-              }} />
-            ) : (
-              <Button key="settings-check-update" plain dimColor label="Check for updates" onPress={() => void checkUpdateNow($)} />
-            )}
             {/* A terminal without link support prints the whole address after the label, so there it copies instead. */}
             {term ? (
               <Button key="settings-bug" plain dimColor label="Report a bug" onPress={async () => {
@@ -5184,7 +4830,7 @@ Saved to ${out}.md and .json` }
             pick({ key: 'settings-model-each', label: 'Each', value: shown.judgeTimeoutMs, options: ['2000', '3000', '4000', '6000'].map(ms => ({ value: ms, label: `${Number(ms) / 1000} s` })), onSelect: set('judgeTimeoutMs') }),
             pick({ key: 'settings-model-all', label: 'In all', value: shown.judgeBudgetMs, options: ['4000', '6000', '8000', '9000'].map(ms => ({ value: ms, label: `${Number(ms) / 1000} s` })), onSelect: set('judgeBudgetMs') }),
 ]) : card === 'judge' ? (bare ? [] : [
-            pick({ key: "settings-judge-pick", value: shown.judge, options: [{ value: 'auto', label: chain.length ? 'Haiku + decision models' : hasKey ? 'Haiku + Jev' : 'Haiku (Jev if added)' }, { value: 'haiku', label: 'Haiku only' }], onSelect: v => set('judge')(v === 'haiku' ? 'haiku' : 'auto') }),
+            pick({ key: "settings-judge-pick", value: shown.judge, options: [{ value: 'auto', label: chain.length ? 'Haiku + decision models' : hasKey ? 'Haiku + Jev' : 'Haiku (decision models if added)' }, { value: 'haiku', label: 'Haiku only' }], onSelect: v => set('judge')(v === 'haiku' ? 'haiku' : 'auto') }),
             ...(shown.judge !== 'haiku'
               ? [
                   // The models in the order tried, Haiku last; their own part edits them.
@@ -5499,8 +5145,8 @@ Saved to ${out}.md and .json` }
         </Box>
       )
       if (step === 'pick')
-        return band('Haiku judges. Add Jev too?', 62, [
-          // Haiku first and filled: it needs no key. Jev is the optional faster one; with a key, it is tried first and
+        return band('Haiku judges. Add a decision model too?', 62, [
+          // Haiku first and filled: it needs no key. A decision model is the optional faster one; with a key, it is tried first and
           // Haiku stands in whenever it does not answer. Each mark sits tight against its own button.
           <Box key="pick-haiku" flexDirection="row" gap={1} alignItems="center">
             <Svg source={CLAUDE_MARK} alt="Claude" width={16} height={16} />
@@ -5508,7 +5154,7 @@ Saved to ${out}.md and .json` }
           </Box>,
           <Box key="pick-jev" flexDirection="row" gap={1} alignItems="center">
             <Svg source={TYPESAFE_MARK} alt="TypeSafe" width={12} height={18} />
-            <Button key="setup-jev" variant="secondary" label="Add Jev (needs a key)" onPress={() => pickJudge($, 'jev')} />
+            <Button key="setup-jev" variant="secondary" label="Add a decision model" onPress={() => pickJudge($, 'jev')} />
           </Box>,
           ...nav(
             <Button key="setup-skip" plain dimColor label="Skip" onPress={async () => {
@@ -5704,8 +5350,6 @@ Saved to ${out}.md and .json` }
       )
     }
     // A handoff or compact running or just done: said above the prompt, where it is seen at once.
-    // A new version: offered, updating, or just updated (gone after UPDATED_CARD_MS or ✕). Desktop only; the terminal
-    // has /effortless update.
     const savedAt = (await $.store.get('settingsSavedAt').catch(() => null)) as number | null
     if (typeof savedAt === 'number') {
       const since = (await $.clock.now().catch(() => Date.now())) - savedAt
@@ -5714,8 +5358,6 @@ Saved to ${out}.md and .json` }
         return savedCardTree($, e)
       }
     }
-    const upd = e.surface === 'terminal' ? null : await read($, updateCard)
-    if (upd && !(upd.stage === 'done' && (await $.clock.now()) - upd.at >= UPDATED_CARD_MS)) return updateCardTree($, e, upd)
     const compactNow = e.surface === 'terminal' ? null : await compactCard($, !!e.props.isWorking)
     if (compactNow)
       return handoffCardTree($, e, compactNow, undefined,
@@ -5724,7 +5366,10 @@ Saved to ${out}.md and .json` }
     const compacting = await read($, isCompacting)
     const coldTokens = compacting ? null : await coldWorth($)
     if (coldTokens !== null) {
-      const line = `Next message rereads ${kTokens(coldTokens)} tokens at full price.`
+      // The slot the app gives the band is narrower than it was (it has a frame of its own now): the long line ended in
+      // an ellipsis in front of the buttons, so a narrow band says the same in fewer words.
+      const narrow = typeof e.props.bodyColumns === 'number' && e.props.bodyColumns < 115
+      const line = narrow ? `Rereads ${kTokens(coldTokens)} tokens at full price.` : `Next message rereads ${kTokens(coldTokens)} tokens at full price.`
       if (e.surface === 'terminal')
         return terminalBand($, e, {
           key: 'cold', kind: 'cold', color: ICE, bg: ICE_BG, edge: ICE_EDGE, title: 'Chat went cold',
