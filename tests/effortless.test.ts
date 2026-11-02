@@ -264,7 +264,7 @@ describe('auto', () => {
   })
 
   test('with the jev judge picked, the TypeSafe key is read from ~/.config/jev/.env when the environment has none', { options: { judge: 'jev' } } as never, async ($, on) => {
-    engine(on, { USERPROFILE: 'C:/Users/x' })
+    engine(on, { USERPROFILE: '/Users/x' })
     mock.clock(on)
     const asked = judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
     const read: string[] = []
@@ -278,7 +278,7 @@ describe('auto', () => {
       return { value: { status: 200, ok: true, headers: {}, text: jevReply('high') } }
     })
     await $.prompt.submit({ text: 'hard task', wait: false, origin: { kind: 'composer' } })
-    expect(read.map(path => path.replaceAll('\\', '/'))).toEqual(['C:/Users/x/.config/jev/.env'])
+    expect(read.map(path => path.replaceAll('\\', '/'))).toEqual(['/Users/x/.config/jev/.env'])
     expect(auth).toEqual(['Bearer from-file'])
     expect(asked.length).toBe(0)
   })
@@ -2444,14 +2444,14 @@ describe('settings panel', () => {
   })
 
   test('Open settings opens the panel; the slider, range and key are saved from it', async ($, on) => {
-    engine(on, { USERPROFILE: 'C:/Users/x' })
+    engine(on, { USERPROFILE: '/Users/x' })
     const mocked = mock.clock(on)
     const set: { key: string; value: unknown }[] = []
     on('config.set', (_$, e) => {
       set.push({ key: e.key, value: e.value })
       return { value: e.value } as never
     })
-    const files: Record<string, string> = { 'C:/Users/x/.config/jev/.env': 'OTHER=1\n' }
+    const files: Record<string, string> = { '/Users/x/.config/jev/.env': 'OTHER=1\n' }
     const at = (path: string) => path.split('\\').join('/')
     on('fs.read', (_$, e) => ({ value: files[at(e.path)] ?? '' }) as never)
     on('fs.write', (_$, e) => {
@@ -2520,7 +2520,7 @@ describe('settings panel', () => {
     expect(set).toContainEqual({ key: 'effortless.modelAuto', value: 'on' })
     expect(set).toContainEqual({ key: 'effortless.helpers', value: 'on' })
     expect(said.join(' | ')).toContain('key saved')
-    expect(files['C:/Users/x/.config/jev/.env']).toBe('OTHER=1\nTYPESAFE_API_KEY=tk-new\n')
+    expect(files['/Users/x/.config/jev/.env']).toBe('OTHER=1\nTYPESAFE_API_KEY=tk-new\n')
     await panel.unmount()
     // A plain card says it was saved, then goes.
     const saved = await $.ui.mount(DESK_BAND)
@@ -3065,7 +3065,7 @@ describe('dashboard', () => {
     await rows.press({ key: 'e-low' })
     await rows.unmount()
     const band = await $.ui.mount(DESK_BAND)
-    expect(await drawn(band)).toContain('"color":"#d4d4d8","bold":true},"children":["Off"]')
+    expect(await drawn(band)).toContain('"color":"text","bold":true,"weight":"semibold"},"children":["Off"]')
     await band.unmount()
   })
 
