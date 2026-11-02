@@ -3114,7 +3114,7 @@ const AUTO_GLOW_H = 37
 /** The cold band's rim: the Auto glow's light in ice, breathing slowly for as long as the band shows, so a cold chat
  * looks alive rather than parked. Placed by the clock (inPhase), so a redraw picks up where the breath was. */
 const COLD_GLOW_MS = 4200
-/** This install's id: effortless@effortless for users, effortless@effortless-dev on the dev channel. Read off the
+/** This install's id: effortless@capybearista for this fork. Read off the
  * cache path (…/plugins/cache/<marketplace>/effortless/<version>). */
 const pluginId = ($: EngineInterface) => `effortless@${$.plugin.root.match(/cache[\\/]([^\\/]+)[\\/]/)?.[1] ?? 'effortless'}`
 

@@ -57,28 +57,30 @@ Two ways. Both take a minute and need no terminal.
 **1. Ask Claude** (easiest). Paste this into Claude Code and press Enter:
 
 ```text
-Install the effortless plugin for me: run `claude plugin marketplace add HeyCubit/effortless` and then `claude plugin install effortless@effortless`. When both succeed, tell me to run /reload-plugins.
+Install the effortless plugin for me: run `claude plugin marketplace add capyBearista/effortless` and then `claude plugin install effortless@capybearista`. When both succeed, tell me to run /reload-plugins.
 ```
 
 **2. Commands.** Type these two lines in Claude Code's chat box:
 
 ```text
-/plugin marketplace add HeyCubit/effortless
+/plugin marketplace add capyBearista/effortless
 ```
 
 ```text
-/plugin install effortless@effortless
+/plugin install effortless@capybearista
 ```
 
 Or in a terminal, in one line:
 
 ```bash
-claude plugin marketplace add HeyCubit/effortless; claude plugin install effortless@effortless
+claude plugin marketplace add capyBearista/effortless; claude plugin install effortless@capybearista
 ```
 
 Then run `/reload-plugins` (or restart Claude Code). A short setup opens above the prompt: keep **Haiku** alone (one click,
 no key, runs on your own Claude login) or add a **decision model** (free Jev on OpenCode Zen needs no key; Jev is about 4x faster than Haiku at effort calls), lean cheaper or
 smarter, and pick how handoffs are written. Run `/effortless setup` to go through it again, or change any of it in ⚙.
+
+To update: `claude plugin marketplace update capybearista; claude plugin update effortless@capybearista`, then restart Claude Code.
 
 ## What the bar shows
 
@@ -122,7 +124,7 @@ limit passes 80% (with a Save mode that caps effort at Medium), and when your ju
 
 Haiku 5.5 runs on your own Claude login and needs no key. It always makes the handoff call: from 30% of context, every second message, it reads what the chat was for, the trail of topics, the last reply and how full the context is, and says a fresh chat would suit only for a clear reason. Then the Compact button turns into a lit Handoff with the reason. Want Handoff on the bar all the time? Settings → Handoff → Handoff button → **Always**.
 
-Haiku also picks the effort, unless you add a decision model, a faster judge such as TypeSafe's Jev (about 0.25 s against about 1 s). The decision models answer the effort first, in order, and Haiku steps in whenever they are unsure or none answers. Run `/plugin configure effortless@effortless` in Claude Code, or use the setup guide or the Judge card in Settings.
+Haiku also picks the effort, unless you add a decision model, a faster judge such as TypeSafe's Jev (about 0.25 s against about 1 s). The decision models answer the effort first, in order, and Haiku steps in whenever they are unsure or none answers. Run `/plugin configure effortless@capybearista` in Claude Code, or use the setup guide or the Judge card in Settings.
 
 | Setting | What it does |
 |---|---|
