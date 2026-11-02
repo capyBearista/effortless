@@ -4021,7 +4021,7 @@ describe('decision models (fork)', () => {
         url: e.url,
         auth: (e.init?.headers as Record<string, string> | undefined)?.authorization,
         headers: (e.init?.headers as Record<string, string> | undefined) ?? {},
-        body: JSON.parse(String(e.init?.body)),
+        body: e.init?.body ? JSON.parse(String(e.init.body)) : {},
       })
       const r = reply(e.url)
       return { value: { status: r.status, ok: r.status < 300, headers: {}, text: r.text } }
@@ -4051,6 +4051,24 @@ describe('decision models (fork)', () => {
     expect(parseDecisionModels(Array.from({ length: 12 }, (_, i) => `opencode/m${i}`).join(',')).length).toBe(MAX_ROUTES)
     expect(readConfig({ decisionModels: CHAIN }).decisionModels.map(r => r.provider)).toEqual(['zen', 'openrouter'])
     expect(readConfig({ judgeTimeoutMs: '50', judgeBudgetMs: '60000' })).toMatchObject({ judgeTimeoutMs: 1000, judgeBudgetMs: 9000 })
+  })
+
+  test('the band says which decision model answered', { options: { decisionModels: 'openrouter/typesafe/jev-1.13', openrouterKey: 'or-k', hide: '', layout: 'default' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    toasts(on)
+    decisions(on, () => ({ status: 200, text: jevReply('max') }))
+    on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
+    on('command.register', () => ({ value: undefined }) as never)
+    await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
+    const guide = await $.ui.mount(DESK_BAND)
+    await guide.press({ key: 'setup-close' })
+    await guide.unmount()
+    await $.prompt.submit({ text: 'designa om hela relayn', wait: false, origin: { kind: 'composer' } })
+    const band = await $.ui.mount(DESK_BAND)
+    expect(await drawn(band)).toContain('jev-1.13: ')
+    await band.unmount()
   })
 
   test('the reason line names a decision model by its short name', () => {
