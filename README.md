@@ -3,7 +3,6 @@
 </p>
 
 <p align="center">
-  <a href="https://heycubit.github.io/effortless/"><b>Website</b></a> ·
   <a href="#install"><b>Install</b></a> ·
   <a href="#what-the-bar-shows"><b>What it shows</b></a> ·
   <a href="#pick-your-judge"><b>Judges</b></a>

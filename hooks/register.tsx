@@ -2790,7 +2790,8 @@ function binSvg(color: string): string {
 }
 const GITHUB_MARK = 'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z'
 const GITHUB_MARK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="#ffffff" d="${GITHUB_MARK}"/></svg>`
-const REPO_URL = 'https://github.com/HeyCubit/effortless'
+/** The fork's repo: the Star link, Share, What's new and bug reports all go here (the fork has no site of its own). */
+const REPO_URL = 'https://github.com/capyBearista/effortless'
 // GitHub's own dark ground, and the width of the panel that carries the star link on the Updated card.
 const GITHUB_BLACK = '#000000'
 const STAR_PANEL = 32
@@ -2900,12 +2901,12 @@ const RELEASES_URL = 'https://api.github.com/repos/HeyCubit/effortless/contents/
 /** Fork: installed from the fork's marketplace (capybearista), where upstream's update card would offer HeyCubit's
  * build over this one. */
 const isForkInstall = ($: EngineInterface) => /[\\/]cache[\\/]capybearista[\\/]/.test($.plugin.root)
-const WHATS_NEW_URL = 'https://heycubit.github.io/effortless/whats-new/'
-/** The site, the link Share copies for a friend. */
-const SITE_URL = 'https://heycubit.github.io/effortless/'
-/** Where a bug is reported: a page on the site that opens a prefilled GitHub issue. */
-const REPORT_BUG_URL = 'https://heycubit.github.io/effortless/report/'
-/** This install's version, read from its plugin.json at session start: the report page fills it in. */
+const WHATS_NEW_URL = `${REPO_URL}/commits/main`
+/** The link Share copies for a friend. */
+const SITE_URL = REPO_URL
+/** Where a bug is reported: a new issue on the fork, the version filled in. */
+const REPORT_BUG_URL = `${REPO_URL}/issues/new`
+/** This install's version, read from its plugin.json at session start: the bug report fills it in. */
 let ownVersion = ''
 /** How often a session looks for a new version, and how long ✕ on the offer keeps it away. */
 const UPDATE_CHECK_MS = 6 * 3600_000
@@ -4982,7 +4983,7 @@ Saved to ${out}.md and .json` }
       const headRow = (kids: unknown[]) => term
         ? <Box key="settings-head" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>{kids}</Box>
         : kids
-      const bugUrl = ownVersion ? `${REPORT_BUG_URL}?effortless=${encodeURIComponent(ownVersion)}` : REPORT_BUG_URL
+      const bugUrl = ownVersion ? `${REPORT_BUG_URL}?body=${encodeURIComponent(`effortless ${ownVersion}`)}` : REPORT_BUG_URL
       return (
         // The dashboard's look: the neutral band and its quiet edge, purple only on the star, no art behind the rows (it
         // made them busy). The entrance
