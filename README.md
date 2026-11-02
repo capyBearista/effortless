@@ -25,7 +25,7 @@ https://github.com/user-attachments/assets/9b5af48e-2ad8-4826-9443-4aeea1306664
 >
 > **Fork: a detailed Full handoff.** Full checks git and writes a detailed `HANDOFF.md` (original task, work completed, work remaining, attempted approaches, critical context, current state, suggested skills) to `docs/internal/`, `docs/local/` or `docs/`, whichever exists first, else the project root. Its turn runs at Medium, whatever the last prompt was judged, then the effort goes back. The handoff bar has an optional field for what the next session is for, used by Quick and Full alike (`/effortless handoff full <focus>` does the same).
 >
-> Install: `claude plugin marketplace add capyBearista/effortless#decisions-chain`, then `claude plugin install effortless@capybearista` (uninstall `effortless@effortless` first). Update with `claude plugin marketplace update capybearista` and `claude plugin update effortless@capybearista`.
+> Install: `claude plugin marketplace add capyBearista/effortless`, then `claude plugin install effortless@capybearista` (uninstall `effortless@effortless` first). Update with `claude plugin marketplace update capybearista` and `claude plugin update effortless@capybearista`.
 
 A Claude Code mod that picks the reasoning effort for every prompt. Quick questions get **Low**, hard jobs get **High**,
 and you never touch the Effort control. On real coding tasks it cut the cost of Opus by **21%** against Anthropic's
