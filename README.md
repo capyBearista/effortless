@@ -80,9 +80,6 @@ Then run `/reload-plugins` (or restart Claude Code). A short setup opens above t
 no key, runs on your own Claude login) or add a **decision model** (free Jev on OpenCode Zen needs no key; Jev is about 4x faster than Haiku at effort calls), lean cheaper or
 smarter, and pick how handoffs are written. Run `/effortless setup` to go through it again, or change any of it in ⚙.
 
-Updates come to you: when a new version is out, a card above the prompt offers **Update** or **Later**. Update loads the
-new version in the chat you pressed it in, with nothing to type.
-
 ## What the bar shows
 
 <p align="center"><img src="docs/readme/hero.gif" alt="The bar: Deciding, then Low for a quick question, then High for a refactor" width="100%"></p>
@@ -142,7 +139,7 @@ Short follow-ups such as "go", "ok" or "yes" keep the effort already picked and 
 - The default judge needs **no key**: Haiku runs on your own Claude login.
 - A key is only needed for some decision models (OpenRouter, TypeSafe); free Jev on OpenCode Zen needs none. Enter it with `/plugin configure`, never on the command line, so it stays out of your shell history: Claude Code then keeps it in its secure storage. A key pasted in the setup guide or the Judge card is saved in plain text to `~/.config/jev/.env` instead, so prefer `/plugin configure` on a shared machine.
 - Each key is sent only to its own provider (the OpenRouter key to OpenRouter, the TypeSafe key to TypeSafe), and to nothing else. Use a key with a spending limit if your provider offers one.
-- Like any Claude Code plugin, this mod runs code on your machine. Its code is in [`hooks/`](hooks/): read it before you install if you do not know the author. The programs it starts are `claude` itself (to update or uninstall the mod when you press those buttons), `git` (to see if a new version is out) and, on Update, a plain file copy of the new version into the folder your open chat runs from.
+- Like any Claude Code plugin, this mod runs code on your machine. Its code is in [`hooks/`](hooks/): read it before you install if you do not know the author. The programs it starts are `claude` itself (to uninstall the mod when you press that button) and `chmod` (to keep a key file it saves readable only by you).
 
 ## What it saves, measured
 
@@ -233,7 +230,6 @@ Tested on Claude Code 2.1.285 (stable), 2.1.286 and 2.1.288 at 80 and 120 column
 | `/effortless cold`, `swamp`, `hot`, `down` | shows that bar now, to try it |
 | `/effortless bench` | scores each judge you have on the labelled prompts in [`bench/judge-cases.json`](bench/judge-cases.json) |
 | `/effortless debug` | what the mod sees, and on its last line the model and effort the last request ran on |
-| `/effortless update` | checks for a new version now |
 
 ## Open source
 

@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { hopTimeout, MAX_ROUTES, movedEarlier, parseDecisionModels, routeLabel, routeShortName, withoutRoute, withRoute } from '../hooks/decisions'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
@@ -3379,48 +3379,28 @@ describe('a message typed while a turn runs', () => {
   })
 })
 
-describe('updates', () => {
+describe('compact, uninstall and the claude CLI', () => {
   const DESK = { options: { layout: 'default' } } as never
-  /** A session with `installed` on disk and `latest` on main; records what the mod runs. */
-  function world(on: On, v: { installed: string; latest: string; fails?: string; git?: string; installPath?: string; noCli?: (bin: string) => boolean; env?: Record<string, string> }) {
-    engine(on, v.env)
-    const clock = mock.clock(on)
+  /** A session with `installed` on disk; records what the mod runs. */
+  function world(on: On, v: { installed: string }) {
+    engine(on)
+    mock.clock(on)
     on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
     on('fs.read', (_$, e) => {
       if (String(e.path).replaceAll('\\', '/').endsWith('.claude-plugin/plugin.json')) return { value: JSON.stringify({ version: v.installed }) } as never
-      if (v.installPath && String(e.path).replaceAll('\\', '/').endsWith('installed_plugins.json')) return { value: JSON.stringify({ plugins: { 'effortless@effortless': [{ installPath: v.installPath }] } }) } as never
-      if (String(e.path).replaceAll('\\', '/').endsWith('marketplaces/effortless/public.json')) return { value: JSON.stringify([{ version: v.latest, note: 'Quick and Full as one switch.' }]) } as never
       return { value: '' } as never
     })
-    on('http.fetch', (_$, e) => {
-      if (String(e.url).includes('public.json'))
-        return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify([{ version: v.latest, date: '2026-10-07', note: 'Quick and Full as one switch.' }]) } } as never
-      return { value: { status: 404, ok: false, headers: {}, text: '' } } as never
-    })
     const ran: string[] = []
-    const envs: (Record<string, string> | undefined)[] = []
     on('process.run', (_$, e) => {
-      // No claude where the app looks: the engine refuses to start it, as it does for a desktop-only user.
-      if (v.noCli?.(e.argv[0])) return { deny: `$.process.run(${e.argv[0]}) failed to start: ENOENT: Command '${e.argv[0]}' not found or is in an unsafe location (current directory)` } as never
       ran.push(e.argv.join(' '))
-      envs.push(e.init?.env)
-      // git show answers with public.json as it is on stable, when the test gives one.
-      const stdout = e.argv[0] === 'git' && e.argv.includes('show') ? (v.git ?? '') : ''
-      return { value: v.fails ? { exitCode: 1, stdout: '', stderr: v.fails } : { exitCode: 0, stdout, stderr: '' } } as never
+      return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
     })
     const commands: string[] = []
-    const commandArgs: string[] = []
     on('command.run', (_$, e) => {
       commands.push(`/${e.command}`)
-      if (e.args) commandArgs.push(`/${e.command} ${e.args}`)
       return { text: 'ok' }
     })
-    const copied: string[] = []
-    on('ui.copy', (_$, e) => {
-      copied.push((e as { text: string }).text)
-      return { value: { isCopied: true as const } } as never
-    })
-    return { clock, ran, envs, commands, commandArgs, copied }
+    return { ran, commands }
   }
   const settle = () => new Promise(resolve => setTimeout(resolve, 30))
   /** Through the setup guide a first session opens, which takes the band before any card. */
@@ -3430,107 +3410,8 @@ describe('updates', () => {
   }
   const start = ($: Engine) => $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
 
-  test('versions compare by number and releases.json gives its newest entry', () => {
-    expect(isNewer('1.35.80', '1.35.79')).toBe(true)
-    expect(isNewer('1.36.0', '1.35.99')).toBe(true)
-    expect(isNewer('1.35.9', '1.35.10')).toBe(false)
-    expect(isNewer('1.35.79', '1.35.79')).toBe(false)
-    expect(latestRelease('[{"version":"1.2.3","note":"x"},{"version":"1.2.2"}]')).toEqual({ version: '1.2.3', note: 'x' })
-    expect(latestRelease('not json')).toBeUndefined()
-    expect(latestRelease('[{"version":"latest"}]')).toBeUndefined()
-  })
-
-  test('Check for updates in Settings looks now, past a Later, and offers the install in the same place', DESK, async ($, on) => {
-    world(on, { installed: '1.0.0', latest: '1.0.1' })
-    await start($)
-    await settle()
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(ui)
-    await ui.press({ key: 'update-later' })
-    expect(await drawn(ui)).not.toContain('is out')
-    await $.command.run({ command: 'effortless', args: 'settings' } as never)
-    const panel = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    expect(await panel.find({ key: 'settings-check-update' })).toBeDefined()
-    await panel.press({ key: 'settings-check-update' })
-    await settle()
-    expect((await panel.find({ key: 'settings-update' }))?.text).toContain('Update to 1.0.1')
-  })
-
-  test('a version found earlier is not offered once the installed one is as new', DESK, async ($, on) => {
-    const v = { installed: '1.0.0', latest: '1.0.1' }
-    world(on, v)
-    await start($)
-    await settle()
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(ui)
-    await ui.press({ key: 'update-later' })
-    await $.command.run({ command: 'effortless', args: 'settings' } as never)
-    const panel = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await panel.press({ key: 'settings-check-update' })
-    await settle()
-    expect((await panel.find({ key: 'settings-update' }))?.text).toContain('Update to 1.0.1')
-    // Installed some other way (a dev release, claude plugin update), and newer than what was found.
-    v.installed = '1.0.2'
-    v.latest = '1.0.2'
-    await start($)
-    await settle()
-    const again = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    expect(await again.find({ key: 'settings-update' })).toBeUndefined()
-    expect(await again.find({ key: 'settings-check-update' })).toBeDefined()
-  })
-
-  test('Check for updates trusts git over a web answer that lags behind', DESK, async ($, on) => {
-    const w = world(on, { installed: '1.0.1', latest: '1.0.1', git: JSON.stringify([{ version: '1.0.2', note: 'From git.' }]) })
-    await start($)
-    await settle()
-    await $.command.run({ command: 'effortless', args: 'settings' } as never)
-    const panel = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(panel)
-    await $.command.run({ command: 'effortless', args: 'settings' } as never)
-    const again = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await again.press({ key: 'settings-check-update' })
-    await settle()
-    expect((await again.find({ key: 'settings-update' }))?.text).toContain('Update to 1.0.2')
-    expect(w.ran.some(r => r.includes('fetch -q --depth 1 --filter=blob:none origin stable'))).toBe(true)
-  })
-
-  test('Check for updates looks again while an earlier Updated card is still up', DESK, async ($, on) => {
-    const v = { installed: '1.0.0', latest: '1.0.1' }
-    world(on, v)
-    await start($)
-    await settle()
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(ui)
-    await ui.press({ key: 'update-go' })
-    await settle()
-    v.installed = '1.0.1'
-    await start($)
-    await settle()
-    expect(await drawn(ui)).toContain('Updated to 1.0.1')
-    // A newer release lands while that card is still showing.
-    v.latest = '1.0.2'
-    await $.command.run({ command: 'effortless', args: 'settings' } as never)
-    const panel = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await panel.press({ key: 'settings-check-update' })
-    await settle()
-    expect((await panel.find({ key: 'settings-update' }))?.text).toContain('Update to 1.0.2')
-  })
-
-  test('Check for updates says Up to date when there is nothing newer', DESK, async ($, on) => {
-    world(on, { installed: '1.0.1', latest: '1.0.1' })
-    await start($)
-    await settle()
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(ui)
-    await $.command.run({ command: 'effortless', args: 'settings' } as never)
-    const panel = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await panel.press({ key: 'settings-check-update' })
-    await settle()
-    expect(await drawn(panel)).toContain('Up to date')
-  })
-
   test('the one button says Compact, opens the compact step, and stays on a narrow bar', DESK, async ($, on) => {
-    world(on, { installed: '1.0.1', latest: '1.0.1' })
+    world(on, { installed: '1.0.1' })
     await start($)
     await settle()
     const wide = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
@@ -3549,94 +3430,8 @@ describe('updates', () => {
     await narrow.unmount()
   })
 
-  test('a newer version is offered; ✕ puts it away for a day, then it is offered again', DESK, async ($, on) => {
-    world(on, { installed: '1.0.0', latest: '1.0.1' })
-    await start($)
-    await settle()
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(ui)
-    expect(await drawn(ui)).toContain('effortless 1.0.1 is out')
-    expect((await ui.find({ key: 'update-go' }))?.text).toContain('Update')
-
-    await ui.press({ key: 'update-later' })
-    expect(await drawn(ui)).not.toContain('is out')
-    await start($)
-    await settle()
-    expect(await drawn(ui)).not.toContain('is out')
-
-    // A day later, or a newer version, comes back.
-    expect(updateSnoozed({ version: '1.0.1', at: 0 }, '1.0.1', 23 * 3600_000)).toBe(true)
-    expect(updateSnoozed({ version: '1.0.1', at: 0 }, '1.0.1', 25 * 3600_000)).toBe(false)
-    expect(updateSnoozed({ version: '1.0.1', at: 0 }, '1.0.2', 60_000)).toBe(false)
-    await ui.unmount()
-  })
-
-  test('nothing is offered when the installed version is the newest', DESK, async ($, on) => {
-    world(on, { installed: '1.0.1', latest: '1.0.1' })
-    await start($)
-    await settle()
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(ui)
-    expect(await drawn(ui)).not.toContain('update-card')
-    await ui.unmount()
-  })
-
-  test('syncPlan copies the installed version over the running cache folder, and nowhere else', () => {
-    const oldDir = 'C:\\Users\\x\\.claude\\plugins\\cache\\effortless-dev\\effortless\\1.57.0'
-    const newDir = 'C:\\Users\\x\\.claude\\plugins\\cache\\effortless-dev\\effortless\\1.59.0'
-    expect(syncPlan(oldDir, newDir)?.slice(0, 3)).toEqual(['robocopy', newDir, oldDir])
-    expect(syncPlan('/h/.claude/plugins/cache/m/effortless/1.0.0', '/h/.claude/plugins/cache/m/effortless/1.0.1')).toEqual(['cp', '-R', '/h/.claude/plugins/cache/m/effortless/1.0.1/.', '/h/.claude/plugins/cache/m/effortless/1.0.0'])
-    // The same folder, nothing installed, or a working copy outside the cache: nothing is written.
-    expect(syncPlan(newDir, newDir)).toBeUndefined()
-    expect(syncPlan(oldDir, undefined)).toBeUndefined()
-    expect(syncPlan('C:\\Users\\x\\Documents\\effortless', newDir)).toBeUndefined()
-  })
-
-  test('Update runs the two claude plugin commands, reloads, and the new version says Updated with a link', DESK, async ($, on) => {
-    const v = { installed: '1.0.0', latest: '1.0.1' }
-    const w = world(on, v)
-    await start($)
-    await settle()
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(ui)
-    w.ran.length = 0
-    await ui.press({ key: 'update-go' })
-    await settle()
-    expect(w.ran).toEqual(['claude plugin marketplace update effortless', 'claude plugin update effortless@effortless'])
-    expect(w.commands).toContain('/reload-plugins')
-    // Forced: a plain reload holds the new version back to keep the cache, and the old code would go on running.
-    expect(w.commandArgs).toContain('/reload-plugins --force')
-
-    // The reload: the new version on disk starts again.
-    v.installed = '1.0.1'
-    await start($)
-    await settle()
-    const text = await drawn(ui)
-    expect(text).toContain('Updated to 1.0.1')
-    expect(text).toContain('capyBearista/effortless/commits/main')
-    expect(text).toContain('Star on GitHub')
-    await ui.press({ key: 'update-share-go' })
-    await settle()
-    expect(w.copied).toEqual(['https://github.com/capyBearista/effortless'])
-    expect(text).toContain('github.com/capyBearista/effortless')
-    await ui.unmount()
-  })
-
-  test('Settings shows no Star link anywhere; it belongs on the Updated card only', DESK, async ($, on) => {
-    world(on, { installed: '1.0.1', latest: '1.0.1' })
-    await start($)
-    await settle()
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(ui)
-    await ui.press({ key: 'dash-settings' })
-    expect(await drawn(ui)).not.toContain('Star')
-    await ui.press({ key: 'settings-card-show' })
-    expect(await drawn(ui)).not.toContain('Star')
-    await ui.unmount()
-  })
-
   test('Uninstall in Customize asks for a second press, then uninstalls and reloads', DESK, async ($, on) => {
-    const w = world(on, { installed: '1.0.1', latest: '1.0.1' })
+    const w = world(on, { installed: '1.0.1' })
     on('ui.toast', () => ({ value: undefined }) as never)
     await start($)
     await settle()
@@ -3656,37 +3451,6 @@ describe('updates', () => {
     await ui.unmount()
   })
 
-  test('a failed update says why and offers to try again', DESK, async ($, on) => {
-    world(on, { installed: '1.0.0', latest: '1.0.1', fails: 'network down' })
-    await start($)
-    await settle()
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(ui)
-    await ui.press({ key: 'update-go' })
-    await settle()
-    const text = await drawn(ui)
-    expect(text).toContain('Update failed')
-    expect(text).toContain('network down')
-    expect((await ui.find({ key: 'update-go' }))?.text).toContain('Try again')
-    await ui.unmount()
-  })
-
-  test('a failed clone names git\'s own reason, not the tail of a wrapped sentence', () => {
-    const ssh = [
-      '✘ Failed to install plugin "effortless@effortless": Failed to clone repository: Cloning into \'C:\\x\\temp_github_1\'...',
-      'git@github.com: Permission denied (publickey).',
-      'fatal: Could not read from remote repository.',
-      '',
-      'Please make sure you have the correct access rights',
-      'and the repository exists.',
-    ].join('\r\n')
-    expect(updateFailure(ssh)).toBe('Could not read from remote repository.')
-    expect(updateFailure('✘ Plugin "effortless" not found in marketplace\n')).toBe('Plugin "effortless" not found in marketplace')
-    expect(updateFailure('network down')).toBe('network down')
-    expect(updateFailure('x'.repeat(300))).toHaveLength(160)
-    expect(updateFailure('')).toBe('')
-  })
-
   test('claude is looked for on PATH, then where the Windows and Mac installers put it', () => {
     expect(claudeCandidates('C:/Users/friend')).toEqual(['claude', 'C:/Users/friend/.local/bin/claude.exe'])
     expect(claudeCandidates('/Users/friend')).toEqual(['claude', '/Users/friend/.local/bin/claude'])
@@ -3695,53 +3459,6 @@ describe('updates', () => {
     expect(noClaudeHint('spawn claude ENOENT', '/Users/friend')).toContain('install.sh')
     expect(noClaudeHint('network down', '/Users/friend')).toBeUndefined()
   })
-
-  test('with no claude on PATH, the update runs the installed one in .local/bin', DESK, async ($, on) => {
-    const w = world(on, { installed: '1.0.0', latest: '1.0.1', noCli: bin => bin === 'claude', env: { USERPROFILE: 'C:/Users/friend' } })
-    await start($)
-    await settle()
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(ui)
-    await ui.press({ key: 'update-go' })
-    await settle()
-    expect(w.ran.filter(r => r.includes('plugin update effortless@'))).toEqual(['C:/Users/friend/.local/bin/claude.exe plugin update effortless@effortless'])
-    expect(await drawn(ui)).toContain('Updated to 1.0.1')
-    await ui.unmount()
-  })
-
-  test('with no claude anywhere, a failed update says the CLI is needed and how to get it', DESK, async ($, on) => {
-    const { copied } = world(on, { installed: '1.0.0', latest: '1.0.1', noCli: () => true, env: { USERPROFILE: 'C:/Users/friend' } })
-    on('ui.toast', () => ({ value: undefined }) as never)
-    await start($)
-    await settle()
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(ui)
-    await ui.press({ key: 'update-go' })
-    await settle()
-    const text = await drawn(ui)
-    expect(text).toContain('Update failed')
-    expect(text).toContain('install.ps1')
-    expect(text).not.toContain('ENOENT')
-    // The line can be cut off on a narrow card: Copy install command hands it over whole.
-    await ui.press({ key: 'update-copy' })
-    expect(copied).toEqual(['irm https://claude.ai/install.ps1 | iex'])
-    await ui.unmount()
-  })
-
-  test('the update reaches GitHub over HTTPS, so users without an SSH key there can update', DESK, async ($, on) => {
-    const w = world(on, { installed: '1.0.0', latest: '1.0.1' })
-    await start($)
-    await settle()
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
-    await pastSetup(ui)
-    await ui.press({ key: 'update-go' })
-    await settle()
-    const steps = w.ran.map((r, i) => [r, w.envs[i]] as const).filter(([r]) => r.startsWith('claude plugin'))
-    expect(steps.slice(-2).map(([r]) => r)).toEqual(['claude plugin marketplace update effortless', 'claude plugin update effortless@effortless'])
-    for (const [, env] of steps) expect(env).toMatchObject({ GIT_CONFIG_KEY_0: 'url.https://github.com/HeyCubit/.insteadOf', GIT_CONFIG_VALUE_0: 'git@github.com:HeyCubit/' })
-    await ui.unmount()
-  })
-
 })
 
 describe('agent panel', () => {
