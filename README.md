@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/9b5af48e-2ad8-4826-9443-4aeea1306664
 > [!NOTE]
 > **Fork: decision-model chain.** This fork of [HeyCubit/effortless](https://github.com/HeyCubit/effortless) can ask an ordered list of decision models before Haiku, on OpenCode Zen, OpenRouter or TypeSafe. Each failure (error, timeout, unusable answer) passes to the next model; a model with no key is skipped. When none answers, Haiku judges and one toast says why.
 >
-> Set it up in effortless itself: the setup guide's Jev step offers free Jev on OpenCode Zen, an OpenRouter key or a TypeSafe key, and Settings → Judge → **Models** adds, reorders and removes models. A key pasted there is kept in `~/.config/openrouter.env` (owner-only), since a mod cannot write Claude Code's secret settings. The same options are in `/plugin` → effortless → Configure:
+> Set it up in effortless itself: the setup guide's decision-model step offers free Jev on OpenCode Zen, an OpenRouter key or a TypeSafe key, and Settings → Judge → **Models** adds, reorders and removes models. A key pasted there is kept in `~/.config/openrouter.env` (owner-only), since a mod cannot write Claude Code's secret settings. The same options are in `/plugin` → effortless → Configure:
 >
 > | Setting | Example |
 > |---|---|
@@ -77,7 +77,7 @@ claude plugin marketplace add HeyCubit/effortless; claude plugin install effortl
 ```
 
 Then run `/reload-plugins` (or restart Claude Code). A short setup opens above the prompt: keep **Haiku** alone (one click,
-no key, runs on your own Claude login) or add **Jev** (a TypeSafe key, about 4x faster effort calls), lean cheaper or
+no key, runs on your own Claude login) or add a **decision model** (free Jev on OpenCode Zen needs no key; Jev is about 4x faster than Haiku at effort calls), lean cheaper or
 smarter, and pick how handoffs are written. Run `/effortless setup` to go through it again, or change any of it in ⚙.
 
 Updates come to you: when a new version is out, a card above the prompt offers **Update** or **Later**. Update loads the
@@ -121,27 +121,27 @@ limit passes 80% (with a Save mode that caps effort at Medium), and when your ju
 
 <p align="center"><img src="docs/readme/settings.png" alt="The settings panel: Effort, Judge, Handoff, Customize" width="100%"></p>
 
-## Haiku, and Jev if you add it
+## Haiku, and decision models if you add them
 
 Haiku 5.5 runs on your own Claude login and needs no key. It always makes the handoff call: from 30% of context, every second message, it reads what the chat was for, the trail of topics, the last reply and how full the context is, and says a fresh chat would suit only for a clear reason. Then the Compact button turns into a lit Handoff with the reason. Want Handoff on the bar all the time? Settings → Handoff → Handoff button → **Always**.
 
-Haiku also picks the effort, unless you add Jev, TypeSafe's faster judge (about 0.25 s against about 1 s). With a key, Jev answers the effort first and Haiku steps in whenever Jev is unsure. Run `/plugin configure effortless@effortless` in Claude Code, or use the setup guide or the Judge card in Settings.
+Haiku also picks the effort, unless you add a decision model, a faster judge such as TypeSafe's Jev (about 0.25 s against about 1 s). The decision models answer the effort first, in order, and Haiku steps in whenever they are unsure or none answers. Run `/plugin configure effortless@effortless` in Claude Code, or use the setup guide or the Judge card in Settings.
 
 | Setting | What it does |
 |---|---|
-| `auto` (default) | Haiku, and Jev too when a [TypeSafe](https://typesafe.ai) key is set in the settings or `TYPESAFE_API_KEY` |
+| `auto` (default) | Haiku, and the decision models too. With none set: Jev on [TypeSafe](https://typesafe.ai) when a TypeSafe key is set in the settings or `TYPESAFE_API_KEY` |
 | `haiku` | Haiku only, a key is never used |
-| `jev` | Haiku and Jev, and the key may also come from `~/.config/jev/.env` |
+| `jev` | As `auto`, and the TypeSafe key may also come from `~/.config/jev/.env` |
 
-A key set with `/plugin configure` is kept in Claude Code's secure storage. A key pasted in the setup guide or the Judge card is written in plain text to `~/.config/jev/.env` (the file the jev skills read), never to a file of this repo. If Jev fails or takes longer than 3 seconds, Haiku judges that prompt and effortless tells you why once per session (out of credits, key rejected, no answer).
+A key set with `/plugin configure` is kept in Claude Code's secure storage. A key pasted in the setup guide or the Judge card is written in plain text to `~/.config/jev/.env` (the file the jev skills read), never to a file of this repo. If every decision model fails or runs out of time, Haiku judges that prompt and effortless tells you why once per session (out of credits, key rejected, no answer).
 
 Short follow-ups such as "go", "ok" or "yes" keep the effort already picked and ask no judge.
 
 ## Keys and trust
 
 - The default judge needs **no key**: Haiku runs on your own Claude login.
-- A key is only needed to add Jev. Enter it with `/plugin configure`, never on the command line, so it stays out of your shell history: Claude Code then keeps it in its secure storage. A key pasted in the setup guide or the Judge card is saved in plain text to `~/.config/jev/.env` instead, so prefer `/plugin configure` on a shared machine.
-- A key is sent only to TypeSafe, and to nothing else. Use a key with a spending limit if your provider offers one.
+- A key is only needed for some decision models (OpenRouter, TypeSafe); free Jev on OpenCode Zen needs none. Enter it with `/plugin configure`, never on the command line, so it stays out of your shell history: Claude Code then keeps it in its secure storage. A key pasted in the setup guide or the Judge card is saved in plain text to `~/.config/jev/.env` instead, so prefer `/plugin configure` on a shared machine.
+- Each key is sent only to its own provider (the OpenRouter key to OpenRouter, the TypeSafe key to TypeSafe), and to nothing else. Use a key with a spending limit if your provider offers one.
 - Like any Claude Code plugin, this mod runs code on your machine. Its code is in [`hooks/`](hooks/): read it before you install if you do not know the author. The programs it starts are `claude` itself (to update or uninstall the mod when you press those buttons), `git` (to see if a new version is out) and, on Update, a plain file copy of the new version into the folder your open chat runs from.
 
 ## What it saves, measured

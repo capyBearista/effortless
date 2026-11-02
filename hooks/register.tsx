@@ -5,7 +5,7 @@ import type { AgentRec, Effort, HandoffAfter, HandoffChoice, ModelKey, Pick, Set
 import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolLine, touchOf, withTouch, withWaits } from './agents'
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
-import { chainIds, DECISION_PRESETS, type DecisionRoute, hopTimeout, MAX_ROUTES, movedEarlier, OPENROUTER_APP_HEADERS, OPENROUTER_URL, parseDecisionModels, routeLabel, routeName, withoutRoute, withRoute, ZEN_URL } from './decisions'
+import { chainIds, DECISION_PRESETS, type DecisionRoute, hopTimeout, MAX_ROUTES, movedEarlier, OPENROUTER_APP_HEADERS, OPENROUTER_URL, parseDecisionModels, routeLabel, routeName, routeShortName, withoutRoute, withRoute, ZEN_URL } from './decisions'
 import { accent, onKnob, setLight, setMatchApp, setTheme, themedEls, type ThemeName, THEMES, tintHex } from './theme'
 import { PILL_H, stepsFromTodos, thinkingSvg, THINK_W, withTaskCreated, withTaskUpdated } from './progress'
 
@@ -841,7 +841,7 @@ async function askChain(
     }
     const url = route.provider === 'zen' ? ZEN_URL : route.provider === 'openrouter' ? OPENROUTER_URL : ((await envJevUrl($)) ?? JEV_URL)
     const askedAt = await $.clock.now()
-    const asked = await askDecision($, { name, url, model: route.model, key, timeoutMs }, prompt, current, context)
+    const asked = await askDecision($, { name, url, model: route.model, key, timeoutMs, label: routeShortName(route) }, prompt, current, context)
     if ('judged' in asked) {
       const took = (((await $.clock.now()) - askedAt) / 1000).toFixed(1)
       lastChainAnswer = `${routeLabel(route)} ${took} s`
@@ -861,7 +861,7 @@ async function askChain(
 /** One decision model, asked once: its verdict, or why not (quiet when it answered in a shape that is not a verdict). */
 async function askDecision(
   $: EngineInterface,
-  ask: { name: string; url: string; model: string; key?: string; timeoutMs: number },
+  ask: { name: string; url: string; model: string; key?: string; timeoutMs: number; label?: string },
   prompt: string,
   current: Pick | null,
   context: string,
@@ -906,7 +906,7 @@ async function askDecision(
         // No usage in the reply: counted as 0.
       }
       if (await read($, judgeDown)) await update($, judgeDown, () => null)
-      return { judged: { verdict: { ...verdict, by: 'jev' }, tokens: used } }
+      return { judged: { verdict: { ...verdict, by: 'jev', ...(ask.label ? { judgeName: ask.label } : {}) }, tokens: used } }
     }
     return { reason: `${ask.name} gave no usable answer`, quiet: true }
   } catch (error) {
@@ -2331,7 +2331,7 @@ async function pickJudge($: EngineInterface, choice: 'haiku' | 'jev') {
   await update($, setupDraft, d => ({ ...d, judge: choice === 'haiku' ? 'auto' : choice }))
   await markSetupDone($)
   if (choice === 'haiku') {
-    $.ui.toast('effortless: Haiku 5.5 judges, no key needed. Add a Jev key later for faster answers.')
+    $.ui.toast('effortless: Haiku 5.5 judges, no key needed. Add a decision model later for faster answers.')
     return goSetup($, 'lean')
   }
   if (choice === 'jev' && (await findTypesafeKey($))) {
@@ -2382,7 +2382,7 @@ export function savedText(raw: Spent): string {
     lines.push(`Helpers: ${helperRuns} subagent${helperRuns === 1 ? '' : 's'} (${per.join(', ')}), ${t.helpers.requests} requests, cost about ${tokens(Math.round(t.helpers.cost))} tokens`)
   }
   if (judged) {
-    lines.push(`Judge: Jev ${t.judge.jev}, Haiku ${t.judge.haiku}, average ${Math.round(t.judge.ms / judged)} ms, ${tokens(t.judge.tokens)} tokens in all`)
+    lines.push(`Judge: decision models ${t.judge.jev}, Haiku ${t.judge.haiku}, average ${Math.round(t.judge.ms / judged)} ms, ${tokens(t.judge.tokens)} tokens in all`)
   }
   return lines.join('\n')
 }
@@ -2513,7 +2513,7 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
       : !effortOf(v, v.modelNow ?? 'sonnet')
         ? 'This model runs without an effort level, so Auto has nothing to set.'
       : [
-          v.current ? `Auto picked ${EFFORT_LABELS[v.current.effort]}${v.current.by !== 'manual' ? ` (${v.current.by})` : ''}` : 'Auto picks the effort for each message',
+          v.current ? `Auto picked ${EFFORT_LABELS[v.current.effort]}${v.current.by !== 'manual' ? ` (${v.current.judgeName ?? v.current.by})` : ''}` : 'Auto picks the effort for each message',
           v.current?.why ? `Why: ${v.current.why}` : '',
           `Lean: ${['much cheaper', 'cheaper', 'as the judge says', 'smarter', 'much smarter'][config.bias + 2]} · range ${config.floor} to ${config.ceiling}`,
         ]
@@ -3550,7 +3550,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   const effortNow = effortOf(v, v.modelNow ?? (await sessionModel($)))
   const by = v.current?.by
   const reason = v.current
-    ? `${by === 'manual' || by === 'named' ? 'You' : by === 'jev' ? 'Jev' : 'Haiku'}: ${v.current.why}`
+    ? `${by === 'manual' || by === 'named' ? 'You' : by === 'jev' ? (v.current.judgeName ?? 'Jev') : 'Haiku'}: ${v.current.why}`
     : v.auto
       ? 'Auto picks the effort at the next prompt'
       : 'You pick the effort'
@@ -3833,7 +3833,7 @@ async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opt
     : notAligned
       ? `/effort shows ${EFFORT_LABELS[shownByApp as Effort] ?? shownByApp}`
       : current
-        ? `${current.by === 'manual' ? 'You' : current.by === 'jev' ? 'Jev' : 'Haiku'}: ${current.why}`
+        ? `${current.by === 'manual' ? 'You' : current.by === 'jev' ? (current.judgeName ?? 'Jev') : 'Haiku'}: ${current.why}`
         : auto
           ? 'Picks the effort at the next prompt'
           : 'Pick an effort'
@@ -4247,7 +4247,7 @@ export const register: Register = (on, options) => {
     }
     if (arg === 'down') {
       await update($, judgeDownHidden, () => null)
-      await update($, judgeDown, () => 'Jev is out of credits (402)')
+      await update($, judgeDown, () => 'A decision model is out of credits (402)')
       $.ui.invalidate('ui.render')
       return { text: 'The judge-down band is showing now (a test). It goes away once the judge answers again.' }
     }
@@ -5186,7 +5186,7 @@ Saved to ${out}.md and .json` }
             pick({ key: 'settings-model-each', label: 'Each', value: shown.judgeTimeoutMs, options: ['2000', '3000', '4000', '6000'].map(ms => ({ value: ms, label: `${Number(ms) / 1000} s` })), onSelect: set('judgeTimeoutMs') }),
             pick({ key: 'settings-model-all', label: 'In all', value: shown.judgeBudgetMs, options: ['4000', '6000', '8000', '9000'].map(ms => ({ value: ms, label: `${Number(ms) / 1000} s` })), onSelect: set('judgeBudgetMs') }),
 ]) : card === 'judge' ? (bare ? [] : [
-            pick({ key: "settings-judge-pick", value: shown.judge, options: [{ value: 'auto', label: chain.length ? 'Haiku + decision models' : hasKey ? 'Haiku + Jev' : 'Haiku (Jev if added)' }, { value: 'haiku', label: 'Haiku only' }], onSelect: v => set('judge')(v === 'haiku' ? 'haiku' : 'auto') }),
+            pick({ key: "settings-judge-pick", value: shown.judge, options: [{ value: 'auto', label: chain.length ? 'Haiku + decision models' : hasKey ? 'Haiku + Jev' : 'Haiku (decision models if added)' }, { value: 'haiku', label: 'Haiku only' }], onSelect: v => set('judge')(v === 'haiku' ? 'haiku' : 'auto') }),
             ...(shown.judge !== 'haiku'
               ? [
                   // The models in the order tried, Haiku last; their own part edits them.
@@ -5501,8 +5501,8 @@ Saved to ${out}.md and .json` }
         </Box>
       )
       if (step === 'pick')
-        return band('Haiku judges. Add Jev too?', 62, [
-          // Haiku first and filled: it needs no key. Jev is the optional faster one; with a key, it is tried first and
+        return band('Haiku judges. Add a decision model too?', 62, [
+          // Haiku first and filled: it needs no key. A decision model is the optional faster one; with a key, it is tried first and
           // Haiku stands in whenever it does not answer. Each mark sits tight against its own button.
           <Box key="pick-haiku" flexDirection="row" gap={1} alignItems="center">
             <Svg source={CLAUDE_MARK} alt="Claude" width={16} height={16} />
@@ -5510,7 +5510,7 @@ Saved to ${out}.md and .json` }
           </Box>,
           <Box key="pick-jev" flexDirection="row" gap={1} alignItems="center">
             <Svg source={TYPESAFE_MARK} alt="TypeSafe" width={12} height={18} />
-            <Button key="setup-jev" variant="secondary" label="Add Jev (needs a key)" onPress={() => pickJudge($, 'jev')} />
+            <Button key="setup-jev" variant="secondary" label="Add a decision model" onPress={() => pickJudge($, 'jev')} />
           </Box>,
           ...nav(
             <Button key="setup-skip" plain dimColor label="Skip" onPress={async () => {

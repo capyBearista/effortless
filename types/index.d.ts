@@ -27,6 +27,8 @@ export type Pick = {
   why: string
   /** named: the person said the level in the prompt ("max effort"). */
   by: 'jev' | 'haiku' | 'manual' | 'named'
+  /** jev only: which decision model answered, as the reason line names it (none: Jev on TypeSafe). */
+  judgeName?: string
   /** How sure the judge was of the effort, 0-1, when it said. */
   sure?: number
   /** Haiku only: why a handoff would suit now (a few words), when it said it would. */

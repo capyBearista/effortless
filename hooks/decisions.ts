@@ -64,6 +64,11 @@ export function routeLabel(route: DecisionRoute): string {
   return route.model
 }
 
+/** The short name the band's reason line shows: the model id after its publisher, without a :free tag. */
+export function routeShortName(route: DecisionRoute): string {
+  return route.model.slice(route.model.lastIndexOf('/') + 1).replace(/:free$/, '')
+}
+
 /** Routes back as the setting's text. */
 export function chainIds(routes: readonly DecisionRoute[]): string {
   return routes.map(r => r.id).join(', ')

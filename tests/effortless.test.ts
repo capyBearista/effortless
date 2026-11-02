@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
-import { hopTimeout, MAX_ROUTES, movedEarlier, parseDecisionModels, routeLabel, withoutRoute, withRoute } from '../hooks/decisions'
+import { hopTimeout, MAX_ROUTES, movedEarlier, parseDecisionModels, routeLabel, routeShortName, withoutRoute, withRoute } from '../hooks/decisions'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
 import { afterPrompt, currentStep, phaseAtTurnEnd, progressShare, progressShows, progressTitle, soundArgv, stepNumber, stepsFromTodos, withTaskCreated, withTaskUpdated } from '../hooks/progress'
@@ -627,7 +627,7 @@ describe('footer text', () => {
     expect(text).toContain('1 prompts, 1 requests, cost about 5.1k')
     expect(text).toContain('cache reads 20 %, cache writes 20 %, output 59 %')
     expect(text).toContain('Low 1, average 5.1k')
-    expect(text).toContain('Judge: Jev 0, Haiku 1')
+    expect(text).toContain('Judge: decision models 0, Haiku 1')
     expect(text).not.toContain('saved about')
   })
 
@@ -4051,6 +4051,14 @@ describe('decision models (fork)', () => {
     expect(parseDecisionModels(Array.from({ length: 12 }, (_, i) => `opencode/m${i}`).join(',')).length).toBe(MAX_ROUTES)
     expect(readConfig({ decisionModels: CHAIN }).decisionModels.map(r => r.provider)).toEqual(['zen', 'openrouter'])
     expect(readConfig({ judgeTimeoutMs: '50', judgeBudgetMs: '60000' })).toMatchObject({ judgeTimeoutMs: 1000, judgeBudgetMs: 9000 })
+  })
+
+  test('the reason line names a decision model by its short name', () => {
+    const short = (id: string) => routeShortName(parseDecisionModels(id)[0])
+    expect(short('openrouter/inception/mercury-decide:free')).toBe('mercury-decide')
+    expect(short('openrouter/typesafe/jev-1.13')).toBe('jev-1.13')
+    expect(short('opencode/jev-1.13-free')).toBe('jev-1.13-free')
+    expect(short('typesafe/jev-latest')).toBe('jev-latest')
   })
 
   test('each hop gets its timeout cut to what is left of the budget, and none once it is spent', () => {
