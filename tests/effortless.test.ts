@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { hopTimeout, MAX_ROUTES, movedEarlier, parseDecisionModels, routeLabel, routeShortName, withoutRoute, withRoute } from '../hooks/decisions'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
@@ -1509,49 +1509,6 @@ describe('judge failures are said', () => {
   })
 })
 
-describe('judge benchmark', () => {
-  const c = (id: string, ok: ('low' | 'medium' | 'high')[], message = 'do a thing please') =>
-    ({ id, kind: 'k', current: { model: 'sonnet', effort: 'medium' }, message, ok }) as never
-
-  test('grades an answer as right, too low, too high or missing', () => {
-    expect(benchGrade(c('a', ['medium', 'high']), 'high')).toBe('hit')
-    expect(benchGrade(c('a', ['medium', 'high']), 'low')).toBe('under')
-    expect(benchGrade(c('a', ['low']), 'xhigh')).toBe('over')
-    expect(benchGrade(c('a', ['low']), undefined)).toBe('none')
-  })
-
-  test('the report counts per judge and lists the misses', () => {
-    const cases = [c('a', ['low']), c('b', ['high'])]
-    const report = benchReport(cases, [
-      { id: 'a', judge: 'haiku', effort: 'low', ms: 300, tokens: 10 },
-      { id: 'b', judge: 'haiku', effort: 'medium', ms: 500, tokens: 10 },
-    ])
-    expect(report).toContain('| haiku | 50% | 1 | 0 | 0 | 500 |')
-    expect(report).toContain('haiku b: said medium, wanted high')
-  })
-
-  test('/effortless bench runs every case through Haiku, keeps follow-ups, and writes the report', async ($, on) => {
-    engine(on)
-    mock.clock(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
-    const cases = { cases: [c('a', ['low'], 'rename foo to bar in utils.ts'), c('f', ['medium'], 'go')] }
-    on('fs.read', (_$, e) => ({ value: String(e.path).endsWith('judge-cases.json') ? JSON.stringify(cases) : '' }) as never)
-    const written: Record<string, string> = {}
-    on('fs.write', (_$, e) => {
-      written[String(e.path)] = String(e.text)
-      return { value: undefined } as never
-    })
-    on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
-    on('command.register', () => ({ value: undefined }) as never)
-    await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
-    const res = await $.command.run({ command: 'effortless', args: 'bench' })
-    expect(asked.length).toBe(1)
-    expect(res.text).toContain('| haiku | 100% |')
-    expect(res.text).toContain('| always medium |')
-    expect(Object.keys(written).some(p => p.endsWith('.md'))).toBe(true)
-  })
-})
-
 describe('short answers to a question', () => {
   test('a short reply after a question goes to the judge; between two steps it keeps the effort', () => {
     const asked = 'user: tidy up\nassistant: Done. Should I archive it?'
@@ -3007,21 +2964,6 @@ describe('dashboard', () => {
     await ask(HAIKU, 'no problem, now what is the tests folder called')
     expect(sent.at(-1)).toBe('claude-haiku-5-5')
     expect(String((await $.command.run({ command: 'effortless', args: 'stats' })).text)).toContain('0 redone')
-  })
-
-  test('the bench report says whether low confidence predicts a miss, and which models the judges picked', () => {
-    const cases = [
-      { id: 'a', kind: 'k', current: { model: 'sonnet', effort: 'medium', why: '', by: 'manual' }, message: 'x', ok: ['low'] },
-      { id: 'b', kind: 'k', current: { model: 'sonnet', effort: 'medium', why: '', by: 'manual' }, message: 'y', ok: ['high'] },
-      { id: 'c', kind: 'k', current: { model: 'sonnet', effort: 'medium', why: '', by: 'manual' }, message: 'z', ok: ['medium'] },
-    ] as never
-    const report = benchReport(cases, [
-      { id: 'a', judge: 'haiku', effort: 'low', sure: 0.95, model: 'haiku', ms: 1, tokens: 1 },
-      { id: 'b', judge: 'haiku', effort: 'low', sure: 0.5, model: 'sonnet', ms: 1, tokens: 1 },
-      { id: 'c', judge: 'haiku', effort: 'medium', sure: 0.9, model: 'sonnet', ms: 1, tokens: 1 },
-    ] as never)
-    expect(report).toContain('| haiku (3 with a score) | 93% | 50% | 1 of 1 | 1 of 1 | 1 | 1 |')
-    expect(report).toContain('| haiku | 1 | 2 | 0 | 0 |')
   })
 
   test("its lines: the effort, cache and context; the judge's reason and the last reply", () => {
