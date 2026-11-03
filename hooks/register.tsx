@@ -646,6 +646,9 @@ export const SWAMP_STEPS = [10, 20, 30, 40, 50, 60, 70, 80] as const
  * alert always shows. Each alert also has its own ✕. */
 export const HIDEABLE = ['handoff', 'timer', 'reason', 'progress', 'sounds', 'swamp', 'hot', 'cold'] as const
 export type Hideable = (typeof HIDEABLE)[number]
+const JUDGE_TIMEOUT_MS = 4000
+const JUDGE_BUDGET_MS = 8000
+
 // What the app passed to register, so settings kept in the store can be laid over it at session start.
 let pluginOptions: Record<string, unknown> = {}
 let config: JudgeConfig = {
@@ -653,8 +656,8 @@ let config: JudgeConfig = {
   typesafeKey: '',
   decisionModels: [],
   openrouterKey: '',
-  judgeTimeoutMs: 4000,
-  judgeBudgetMs: 8000,
+  judgeTimeoutMs: JUDGE_TIMEOUT_MS,
+  judgeBudgetMs: JUDGE_BUDGET_MS,
   handoffSkill: '',
   handoffAfter: 'continue',
   bias: 0,
@@ -671,6 +674,21 @@ let config: JudgeConfig = {
   appearance: 'auto',
 }
 
+/** A setting in milliseconds: a positive whole number as typed, else undefined. */
+function validMs(s: string): number | undefined {
+  const n = Number(s)
+  return /^\d+$/.test(s) && n > 0 && Number.isSafeInteger(n) ? n : undefined
+}
+
+/** One line per judge timing the person set that is not a positive whole number, saying the default it falls back to. */
+export function timingWarnings(options: unknown): string[] {
+  const o = (options ?? {}) as Record<string, unknown>
+  return ([['judgeTimeoutMs', JUDGE_TIMEOUT_MS], ['judgeBudgetMs', JUDGE_BUDGET_MS]] as const).flatMap(([k, fallback]) => {
+    const v = typeof o[k] === 'string' ? (o[k] as string).trim() : ''
+    return v && validMs(v) === undefined ? [`${k} "${v}" is not a positive whole number of ms; using ${fallback}`] : []
+  })
+}
+
 /** The settings as the engine hands them over (defaults filled in), cleaned to the shape the judge reads. */
 export function readConfig(options: unknown): JudgeConfig {
   const o = (options ?? {}) as Record<string, unknown>
@@ -681,9 +699,9 @@ export function readConfig(options: unknown): JudgeConfig {
     typesafeKey: str(o.typesafeKey),
     decisionModels: parseDecisionModels(str(o.decisionModels)),
     openrouterKey: str(o.openrouterKey),
-    // Zen's free Jev answered in 0.2-6.5 s (measured 2026-10-22); a prompt.submit hook gets about 10 s in all.
-    judgeTimeoutMs: Math.max(1000, Math.min(9000, Math.round(Number(str(o.judgeTimeoutMs)) || 4000))),
-    judgeBudgetMs: Math.max(1000, Math.min(9000, Math.round(Number(str(o.judgeBudgetMs)) || 8000))),
+    // Used as typed: network waits don't count toward the 10 s hook budget, so the budget is how long a prompt can be held.
+    judgeTimeoutMs: validMs(str(o.judgeTimeoutMs)) ?? JUDGE_TIMEOUT_MS,
+    judgeBudgetMs: validMs(str(o.judgeBudgetMs)) ?? JUDGE_BUDGET_MS,
     handoffSkill: str(o.handoffSkill).replace(/^\//, ''),
     handoffAfter: (['confirm', 'copy'] as const).find(a => a === str(o.handoffAfter)) ?? 'continue',
     bias: Math.max(-2, Math.min(2, Math.round(Number(str(o.effortBias)) || 0))),
@@ -3680,6 +3698,7 @@ export const register: Register = (on, options) => {
     }
     keyFromFile = kff === true
     orKeyFromFile = orKff === true
+    for (const w of timingWarnings(pluginOptions)) $.ui.toast(`effortless: ${w}`)
     await Promise.all([
       typeof storedAuto === 'boolean' ? update($, isAuto, () => storedAuto) : null,
       typeof storedAutoModel === 'boolean' ? update($, isAutoModel, () => storedAutoModel) : null,
@@ -3826,7 +3845,7 @@ export const register: Register = (on, options) => {
           `last draw: ${lastRenderBranch || 'none'}`,
           `app sent: ${lastRenderProps || 'nothing'}`,
           `settings open: ${await read($, settingsOpen)}`,
-          `judge: ${config.judge} · models: ${config.decisionModels.length ? `${config.decisionModels.map(routeLabel).join(' → ')} → Haiku` : 'none'} · last answer: ${lastChainAnswer || 'none yet'}`,
+          `judge: ${config.judge} · models: ${config.decisionModels.length ? `${config.decisionModels.map(routeLabel).join(' → ')} → Haiku` : 'none'} · last answer: ${lastChainAnswer || 'none yet'}${timingWarnings(pluginOptions).map(w => ` · ${w}`).join('')}`,
           `setup step: ${await read($, setupStep)}`,
           `handoff: ${await read($, handoffStage)}`,
           `last fork: ${lastFork ? `${lastFork.outcome}, ${ago(lastFork.at)}` : 'none'}`,

@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/9b5af48e-2ad8-4826-9443-4aeea1306664
 > |---|---|
 > | `decisionModels` | `opencode/jev-1.13-free, openrouter/inception/mercury-decide:free, openrouter/perplexity/pplx-decider-v1.1-27b, openrouter/microsoft/microsoft-decision-1, openrouter/typesafe/jev-1.13` |
 > | `openrouterKey` | your OpenRouter key (or `OPENROUTER_API_KEY` in the environment) |
-> | `judgeTimeoutMs` / `judgeBudgetMs` | per model / all models together, default 4000 / 8000 |
+> | `judgeTimeoutMs` / `judgeBudgetMs` | per model / all models together, in ms, default 4000 / 8000. Any positive whole number is used as typed; a prompt can wait up to the budget before Claude starts |
 >
 > Prefixes: `opencode/<model>` (Zen, free models need no key), `openrouter/<publisher>/<model>`, `typesafe/<model>` (TypeSafe key). Left empty, the fork behaves as upstream. Every call sends your next message (up to 4,000 characters) and the last reply's tail to that provider, so only list providers you are happy to send that to.
 >

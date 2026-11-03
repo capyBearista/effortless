@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, judgeFailure, contextFrom, readConfig, timingWarnings, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { hopTimeout, MAX_ROUTES, movedEarlier, parseDecisionModels, routeLabel, routeShortName, withoutRoute, withRoute } from '../hooks/decisions'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
@@ -3709,7 +3709,51 @@ describe('decision models (fork)', () => {
     expect(parseDecisionModels('')).toEqual([])
     expect(parseDecisionModels(Array.from({ length: 12 }, (_, i) => `opencode/m${i}`).join(',')).length).toBe(MAX_ROUTES)
     expect(readConfig({ decisionModels: CHAIN }).decisionModels.map(r => r.provider)).toEqual(['zen', 'openrouter'])
-    expect(readConfig({ judgeTimeoutMs: '50', judgeBudgetMs: '60000' })).toMatchObject({ judgeTimeoutMs: 1000, judgeBudgetMs: 9000 })
+  })
+
+  test('judge timings are used as typed, with no hidden range; a bad one falls back to the default and is named', () => {
+    expect(readConfig({ judgeTimeoutMs: '12000', judgeBudgetMs: '10000' })).toMatchObject({ judgeTimeoutMs: 12000, judgeBudgetMs: 10000 })
+    expect(readConfig({ judgeTimeoutMs: '60000', judgeBudgetMs: '120000' })).toMatchObject({ judgeTimeoutMs: 60000, judgeBudgetMs: 120000 })
+    expect(readConfig({ judgeTimeoutMs: '50' })).toMatchObject({ judgeTimeoutMs: 50 })
+    expect(readConfig({})).toMatchObject({ judgeTimeoutMs: 4000, judgeBudgetMs: 8000 })
+    expect(timingWarnings({})).toEqual([])
+    expect(timingWarnings({ judgeTimeoutMs: '', judgeBudgetMs: ' ' })).toEqual([])
+    expect(timingWarnings({ judgeTimeoutMs: '12000', judgeBudgetMs: '120000' })).toEqual([])
+    for (const bad of ['0', '-5', 'abc', '1.5', '1e4', '99999999999999999999']) {
+      expect(readConfig({ judgeTimeoutMs: bad, judgeBudgetMs: bad })).toMatchObject({ judgeTimeoutMs: 4000, judgeBudgetMs: 8000 })
+      expect(timingWarnings({ judgeTimeoutMs: bad, judgeBudgetMs: bad })).toEqual([
+        `judgeTimeoutMs "${bad}" is not a positive whole number of ms; using 4000`,
+        `judgeBudgetMs "${bad}" is not a positive whole number of ms; using 8000`,
+      ])
+    }
+  })
+
+  test('a bad judge timing is named in a toast when the session starts', { options: { judgeBudgetMs: 'abc' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    const said = toasts(on)
+    on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
+    on('command.register', () => ({ value: undefined }) as never)
+    await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
+    expect(said).toContain('effortless: judgeBudgetMs "abc" is not a positive whole number of ms; using 8000')
+  })
+
+  test('a 12 s per-model timeout is waited out in full: past the old 9 s cap no judge is asked yet, after it Haiku judges', { options: { decisionModels: 'opencode/jev-1.13-free', judgeTimeoutMs: '12000', judgeBudgetMs: '20000' } } as never, async ($, on) => {
+    engine(on)
+    const mocked = mock.clock(on)
+    const asked = judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
+    on('http.fetch', () => new Promise(() => undefined) as never)
+    const sent = recordSteps(on)
+
+    const submitted = $.prompt.submit({ text: 'designa om hela relayn', wait: false, origin: { kind: 'composer' } })
+    await mocked.advance(9500)
+    expect(asked.length).toBe(0)
+    await mocked.advance(2600)
+    await submitted
+    await step($, 'high')
+
+    expect(asked.length).toBe(1)
+    expect(sent[0]?.effort).toBe('low')
   })
 
   test('the band says which decision model answered', { options: { decisionModels: 'openrouter/typesafe/jev-1.13', openrouterKey: 'or-k', hide: '', layout: 'default' } } as never, async ($, on) => {
@@ -3742,6 +3786,8 @@ describe('decision models (fork)', () => {
     expect(hopTimeout(0, 0, 4000, 8000)).toBe(4000)
     expect(hopTimeout(0, 6000, 4000, 8000)).toBe(2000)
     expect(hopTimeout(0, 7900, 4000, 8000)).toBeUndefined()
+    expect(hopTimeout(0, 0, 12000, 10000)).toBe(10000)
+    expect(hopTimeout(0, 0, 60000, 120000)).toBe(60000)
   })
 
   test('Zen first, with no key; when it fails OpenRouter answers with its key, and Haiku is not asked', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
