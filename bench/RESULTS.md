@@ -1,6 +1,6 @@
 # Benchmarks
 
-Three benchmarks, each one you can run again. None is a lab result: small task sets, few runs. Read the limits under each.
+Two benchmarks, each one you can run again. None is a lab result: small task sets, few runs. Read the limits under each.
 
 ## 1. How much does effortless save? (`bash bench/agentic/run.sh`)
 
@@ -44,20 +44,7 @@ Limits:
 
 Every run: `bench/results/agentic-2026-10-10.md` and `.json`.
 
-## 2. Is the judge right? (`/effortless bench`)
-
-73 hand-labelled prompts (20 held out), version 1.5.1. A case is "right" when the judge's effort is one a careful person would accept.
-
-| Judge | Right | Held out |
-| --- | --- | --- |
-| always medium | 44% | 40% |
-| always high | 51% | 50% |
-| Haiku | 93% | 95% |
-| Jev | 99% | 100% |
-
-Prompts and labels: `bench/judge-cases.json`.
-
-## 3. Why model switching is off (`node bench/quality.mjs`)
+## 2. Why model switching is off (`node bench/quality.mjs`)
 
 An earlier version also moved simple prompts to Haiku or Sonnet. This benchmark measured the answers: 30 self-contained prompts, each answered on Opus and on the model and effort a router would pick (Haiku low for easy, Sonnet medium for normal, Opus high for hard), compared by a blind grader (Opus, high effort). Run 2026-10-09, one run each.
 

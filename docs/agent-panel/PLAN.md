@@ -118,7 +118,7 @@ fake spawn through the states.
 
 Phase 2, picking. Priors, the subagent judge question, apply model at spawn and effort per request, the "why" line,
 settings "Pick model and effort for agents" and "Keep a model Claude names". Add 20 subagent cases to
-`bench/judge-cases.json` and run `/effortless bench`.
+the judge benchmark, which now lives in decisionbench (https://github.com/capybearista/decisionbench).
 
 Phase 3, detail and control. Mockup (b): Why card, activity bars, recent calls, Message, Stop (if Phase 0 shows a
 way), Copy task. Per-agent lines in `/effortless stats`. The savings estimate.

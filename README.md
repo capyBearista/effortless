@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/9b5af48e-2ad8-4826-9443-4aeea1306664
 > |---|---|
 > | `decisionModels` | `opencode/jev-1.13-free, openrouter/inception/mercury-decide:free, openrouter/perplexity/pplx-decider-v1.1-27b, openrouter/microsoft/microsoft-decision-1, openrouter/typesafe/jev-1.13` |
 > | `openrouterKey` | your OpenRouter key (or `OPENROUTER_API_KEY` in the environment) |
-> | `judgeTimeoutMs` / `judgeBudgetMs` | per model / all models together, default 4000 / 8000 |
+> | `judgeTimeoutMs` / `judgeBudgetMs` | per model / all models together, in ms, default 4000 / 8000. Any positive whole number is used as typed; a prompt can wait up to the budget before Claude starts |
 >
 > Prefixes: `opencode/<model>` (Zen, free models need no key), `openrouter/<publisher>/<model>`, `typesafe/<model>` (TypeSafe key). Left empty, the fork behaves as upstream. Every call sends your next message (up to 4,000 characters) and the last reply's tail to that provider, so only list providers you are happy to send that to.
 >
@@ -172,30 +172,7 @@ Moving a simple prompt to Haiku looks cheap on a single prompt: the cheaper answ
 cost 60 to 77% less. But each model keeps its own prompt cache, so a prompt moved mid-chat has to write the whole chat
 into the other model's cache first. Measured on an 80k-token chat, that costs about 5 times what staying on a warm
 Opus does (10 times for Sonnet). So **Cheaper model when it can** is off by default and marked experimental.
-[Details](bench/RESULTS.md#3-why-model-switching-is-off-node-benchquality-mjs).
-
-## How often the judge is right
-
-`/effortless bench` runs labelled prompts through each judge you have set up, using the same code a real prompt goes
-through, and scores them against a fixed effort. Each case lists the efforts a careful person would accept for that
-message on that model. The cases are in [`bench/judge-cases.json`](bench/judge-cases.json); run it yourself.
-
-Two runs on version 1.5.1, 73 cases, Sonnet and Opus 5.5:
-
-| Judge | Right, all 73 | Right, 20 held out | Too low | Too high | Median time |
-| --- | --- | --- | --- | --- | --- |
-| Always medium | 44% | 40% | 17 | 24 | - |
-| Always high | 51% | 50% | 0 | 36 | - |
-| Haiku | 92-93% | 95% | 1 | 4-5 | 0.75 s |
-| Jev | 99% | 100% | 0 | 1 | 0.24 s |
-
-What this does and does not show:
-
-- It measures whether the judge picks a sensible effort, not how much a session costs or how good the answers are.
-- 73 cases is a small set, and the judges are not fully deterministic: runs differ by a few points.
-- The judge prompts were tuned on 53 of the cases. The 20 held-out cases were never tuned against, so that column is
-  the honest one. They were written after the first run showed which kinds of message miss, so they are not blind.
-- Haiku's remaining misses are mostly "yes" or "thanks" after hard work, where it keeps the effort high.
+[Details](bench/RESULTS.md#2-why-model-switching-is-off-node-benchquality-mjs).
 
 ## Models
 
@@ -230,7 +207,6 @@ Tested on Claude Code 2.1.285 (stable), 2.1.286 and 2.1.288 at 80 and 120 column
 | `/effortless handoff` / `handoff full` [focus] | hands off without the bar, with your last choice of what follows; text after it is what the next session is for |
 | `/effortless stats` | what the prompts Auto steered cost this session, per effort, and what the judge took |
 | `/effortless cold`, `swamp`, `hot`, `down` | shows that bar now, to try it |
-| `/effortless bench` | scores each judge you have on the labelled prompts in [`bench/judge-cases.json`](bench/judge-cases.json) |
 | `/effortless debug` | what the mod sees, and on its last line the model and effort the last request ran on |
 
 ## Open source
