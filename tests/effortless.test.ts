@@ -3347,6 +3347,20 @@ describe('agent panel', () => {
     expect(sent.map(s => s.effort)).toEqual(['max'])
   })
 
+  test('with Helpers on, a decision model\'s helper pick says how sure it was', { options: { helpers: 'on', decisionModels: 'opencode/jev-1.13-free' } } as never, async ($, on) => {
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
+    on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: jevReply('high', 0.7) } }))
+    on('agent.spawn', () => ({ agentId: 'h9', model: 'claude-opus-5-5' }) as never)
+    on('turn.complete', () => ({ text: '' }))
+    await start($, on)
+    await $.agent.spawn({ prompt: 'map every caller of judge()', description: 'map callers', subagentType: 'Explore' } as never)
+    await $.command.run({ command: 'effortless', args: 'agents' })
+    const pane = await $.ui.mount(PANE)
+    await pane.press({ key: 'agent-h9-press' }).catch(() => undefined)
+    expect(await drawn(pane)).toContain('70% sure')
+    await pane.unmount()
+  })
+
   test("helperFloor: medium, the person's Min when higher, never above their Max", () => {
     expect(helperFloor('low', 'max')).toBe('medium')
     expect(helperFloor('high', 'max')).toBe('high')
@@ -3746,6 +3760,36 @@ describe('decision models (fork)', () => {
     expect(sent.map(s => s.effort)).toEqual(['high', 'high'])
     const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
     expect(await drawn(ui)).toContain('unsure, keeping')
+    await ui.unmount()
+  })
+
+  test('unsure on the first prompt: the effort kept is the app\'s own, within Min and Max', { options: { decisionModels: CHAIN, openrouterKey: 'or-k', effortFloor: 'high' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    on('model.complete', () => ({ value: { isAnswered: false as const } }) as never)
+    decisions(on, () => ({ status: 200, text: jevReply('low', 0.3) }))
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
+    await step($, 'medium')
+    expect(sent[0].effort).toBe('high')
+  })
+
+  test('a switch away from an unsure pick takes the new model\'s sure answer, and says how sure', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    on('classic.PostModelSwitch', () => ({}) as never)
+    on('model.complete', () => ({ value: { isAnswered: false as const } }) as never)
+    decisions(on, () => ({ status: 200, text: jevReply({ sonnet: 'xhigh', opus: 'low' }, { sonnet: 0.8, opus: 0.3 }) }))
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
+    await $.classic.PostModelSwitch({ from_model: 'claude-opus-5-5', to_model: 'claude-sonnet-5-5', requested_model: null, source: 'picker', context_tokens: 0 } as never)
+    // The app already on xhigh, so the band's note is the reason, not "/effort shows …".
+    await stepOn($, 'claude-sonnet-5-5', 'xhigh')
+    expect(sent[0].effort).toBe('xhigh')
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
+    const text = await drawn(ui)
+    expect(text).toContain('80% sure')
+    expect(text).not.toContain('unsure, keeping')
     await ui.unmount()
   })
 

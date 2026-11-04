@@ -571,6 +571,9 @@ export function parseJevAnswer(text: string): Verdict | undefined {
   return Object.keys(efforts).length ? { efforts, why: '', by: 'jev' } : undefined
 }
 
+/** How sure a decision model was, in the band's words ("70% sure"); nothing when it did not say. */
+const sureWords = (answer: ModelAnswer) => (answer.sure !== undefined ? `${Math.round(answer.sure * 100)}% sure` : '')
+
 /** A verdict's answers in a line: "haiku max · sonnet high · opus medium 40% (unsure)", for debug and the panel's Test. */
 export function answersText(v: Verdict): string {
   return JUDGED.filter(m => v.efforts[m])
@@ -1073,8 +1076,11 @@ async function modelIs($: EngineInterface, id: string) {
   const current = await read($, pick)
   if (current && current.model !== key) {
     // A judged pick takes the new model's own answer, through the person's settings; a level they set or named stays.
+    // Also with Auto off, so turning it back on never brings the old model's answer. A decision model's why is how sure
+    // it was, so that is said anew; Haiku's holds for every model.
     const answer = key !== 'fable' ? current.judged?.[key] : undefined
-    const own = answer && !isUnsure(current.by, answer) ? { ...(await settledPick($, answer, current.why)), sure: answer.sure } : {}
+    const why = current.by === 'jev' || current.why === UNSURE ? (answer ? sureWords(answer) : '') : current.why
+    const own = answer && !isUnsure(current.by, answer) ? { ...(await settledPick($, answer, why)), sure: answer.sure } : {}
     await choose($, { ...current, model: key, ...own })
   }
 }
@@ -2378,7 +2384,9 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
   const effortTip = !v.auto
     ? 'Auto is off: the effort stays as you set it. The power button turns Auto on.'
     : v.pausedNow
-      ? 'Auto waits on this model: an effort change would rewrite its prompt cache.'
+      ? v.modelNow === 'haiku'
+        ? 'This model runs without an effort level, so Auto has nothing to set.'
+        : 'Auto waits on this model: an effort change would rewrite its prompt cache.'
       : !effortOf(v)
         ? 'This model runs without an effort level, so Auto has nothing to set.'
       : [
@@ -3419,7 +3427,8 @@ async function helperSettled($: EngineInterface, verdict: Verdict, modelId: stri
   const saving = (await read($, saveUntil)) !== null
   const leaned = tipped(answer.effort, answer.sure, config.bias)
   const effort = capped(bounded(leaned, helperFloor(config.floor, config.ceiling), config.ceiling), saving)
-  return { effort, why: effort !== leaned && EFFORTS.indexOf(leaned) < EFFORTS.indexOf(effort) ? `${verdict.why} (helpers start at medium)` : verdict.why }
+  const why = verdict.why || sureWords(answer)
+  return { effort, why: effort !== leaned && EFFORTS.indexOf(leaned) < EFFORTS.indexOf(effort) ? `${why} (helpers start at medium)` : why }
 }
 
 /** The verdict for this subagent, claiming a waiting one the first time its id is seen. */
@@ -3847,11 +3856,15 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       const answer = verdict?.efforts[target]
       let applied: Pick | null = null
       if (verdict && answer && !isUnsure(verdict.by, answer)) {
-        const why = verdict.why || (answer.sure !== undefined ? `${Math.round(answer.sure * 100)}% sure` : '')
+        const why = verdict.why || sureWords(answer)
         applied = { model: inUse, ...(await settledPick($, answer, why)), by: verdict.by, ...(verdict.judgeName ? { judgeName: verdict.judgeName } : {}), ...(answer.sure !== undefined ? { sure: answer.sure } : {}), judged: verdict.efforts }
       } else if (verdict) {
-        // Unsure even after Haiku's look (or no answer for this model): effortless keeps the effort in force.
-        applied = { model: inUse, effort: running?.effort ?? 'medium', why: UNSURE, by: verdict.by, ...(verdict.judgeName ? { judgeName: verdict.judgeName } : {}), judged: verdict.efforts }
+        // Unsure even after Haiku's look (or no answer for this model): effortless keeps the effort in force (its pick,
+        // else the app's own), still within Min, Max and save mode.
+        const appNow = await read($, appEffort)
+        const kept = running?.effort ?? (EFFORTS.includes(appNow as Effort) ? (appNow as Effort) : 'medium')
+        const saving = (await read($, saveUntil)) !== null
+        applied = { model: inUse, effort: capped(bounded(kept, config.floor, config.ceiling), saving), why: UNSURE, by: verdict.by, ...(verdict.judgeName ? { judgeName: verdict.judgeName } : {}), judged: verdict.efforts }
       }
       lastVerdictLine = verdict ? `${verdict.judgeName ?? verdict.by}: ${answersText(verdict)} -> ${applied?.effort} on ${inUse} (${applied?.why})` : 'no verdict'
       await countPrompt($, applied?.effort, verdict?.by, ms, judgeTokens)
@@ -4082,7 +4095,8 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     if (waiting) helperWaiting = [...helperWaiting, waiting].slice(-20)
     const result = await next(e)
     // Now its model is known: the effort it runs at, for the pane and the stats.
-    const settled = helper && 'agentId' in result && result.agentId && result.model ? await helperSettled($, helper, result.model) : null
+    const runsOn = ('model' in result && result.model) || e.model || e.parentModel
+    const settled = helper && 'agentId' in result && result.agentId && runsOn ? await helperSettled($, helper, runsOn) : null
     if (waiting) {
       helperWaiting = helperWaiting.filter(w => w !== waiting)
       if ('agentId' in result && result.agentId && !helperPicks.has(result.agentId)) helperPicks.set(result.agentId, waiting.verdict)
