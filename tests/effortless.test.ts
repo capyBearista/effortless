@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, judgeFailure, contextFrom, readConfig, timingWarnings, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, judgeFailure, contextFrom, readConfig, timingWarnings, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { hopTimeout, MAX_ROUTES, movedEarlier, parseDecisionModels, routeLabel, routeShortName, withoutRoute, withRoute } from '../hooks/decisions'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
@@ -52,7 +52,7 @@ function judgeSays(on: On, text: string) {
 /** What sits beneath the plugins in a session: the prompt goes through, the status line takes text. */
 function engine(on: On, env: Record<string, string> = {}, sessionModel = 'claude-opus-5-5', said: { role: string; text: string }[] = []) {
   mock.store(on)
-  mock.env(on, { EFFORTLESS_MODEL_UI: '1', ...env })
+  mock.env(on, env)
   on('prompt.submit', (_$, e) => ({ text: e.text }))
   on('ui.status', () => ({ value: undefined }))
   on('session.messages', () => ({ value: said }) as never)
@@ -138,7 +138,7 @@ async function clickable(ui: { drawn: () => Promise<unknown> }, layer: string) {
 }
 
 describe('auto', () => {
-  test('with the cheaper model off, effort follows the judge and the model stays the one in use', { options: { modelAuto: 'off' } } as never, async ($, on) => {
+  test('effort follows the judge and the model stays the one in use', async ($, on) => {
     engine(on)
     judgeSays(on, '{"model":"haiku","effort":"low","why":"simple question"}')
     const sent = recordSteps(on)
@@ -165,35 +165,7 @@ describe('auto', () => {
     expect(sent[2].effort).toBe('xhigh')
   })
 
-  test('routeWorth: a switch to a cold model pays only when it still comes out cheaper', () => {
-    const big = 100_000
-    // Opus chat, cache warm: a cold Sonnet writes the whole chat and costs more; a warm Sonnet is far cheaper.
-    expect(routeWorth('sonnet', 'opus', big, { to: false, inUse: true })).toBe(false)
-    expect(routeWorth('sonnet', 'opus', big, { to: true, inUse: true })).toBe(true)
-    // A cold Haiku writes the whole chat (a third of the price, 1.25 times) against a warm Opus read (twice the price, a tenth): still more.
-    expect(routeWorth('haiku', 'opus', big, { to: false, inUse: true })).toBe(false)
-    expect(routeWorth('haiku', 'opus', big, { to: true, inUse: true })).toBe(true)
-    // The chat's own cache gone cold: staying would write it all again on Opus, so Sonnet wins even cold.
-    expect(routeWorth('sonnet', 'opus', big, { to: false, inUse: false })).toBe(true)
-    // No context size known: route as before.
-    expect(routeWorth('sonnet', 'opus', 0, { to: false, inUse: true })).toBe(true)
-  })
-
-  test('a prompt the judge calls simple runs on Haiku 5.5; the next hard one is back on the chat model', { options: { modelAuto: 'on' } } as never, async ($, on) => {
-    engine(on)
-    let verdict = '{"model":"haiku","effort":"low","why":"simple question"}'
-    on('model.complete', () => ({ value: { isAnswered: true as const, text: verdict, usage: USAGE } }))
-    const sent = recordSteps(on)
-    await $.prompt.submit({ text: 'vad heter mappen?', wait: false, origin: { kind: 'composer' } })
-    await step($)
-    expect(sent[0]).toEqual({ model: 'claude-haiku-5-5', effort: 'low' })
-    verdict = '{"model":"opus","effort":"high","why":"big refactor"}'
-    await $.prompt.submit({ text: 'refactor the whole auth layer', wait: false, origin: { kind: 'composer' } })
-    await step($)
-    expect(sent[1]).toEqual({ model: 'claude-opus-5-5', effort: 'high' })
-  })
-
-  test('a typed skill is judged like a prompt (told what it is); the app\'s own commands are not', { options: { modelAuto: 'on' } } as never, async ($, on) => {
+  test('a typed skill is judged like a prompt (told what it is); the app\'s own commands are not', async ($, on) => {
     engine(on)
     const asked: string[] = []
     on('model.complete', (_$, e) => {
@@ -206,7 +178,7 @@ describe('auto', () => {
     await step($)
     expect(asked.length).toBe(1)
     expect(asked[0]).toContain('slash command that runs a skill')
-    expect(sent[0].model).toBe('claude-haiku-5-5')
+    expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'low' })
     // /model is the app's own: never judged.
     await $.prompt.submit({ text: '/model', wait: false, origin: { kind: 'composer' } })
     expect(asked.length).toBe(1)
@@ -321,7 +293,7 @@ describe('manual effort', () => {
 })
 
 describe('model in use', () => {
-  test('a switch in the app moves the band, and effort applies to the new model at once', { options: { modelAuto: 'off' } } as never, async ($, on) => {
+  test('after a switch in the app, effort applies to the new model at once', async ($, on) => {
     engine(on)
     judgeSays(on, '{"model":"haiku","effort":"low","why":"kort"}')
     const sent = recordSteps(on)
@@ -332,59 +304,12 @@ describe('model in use', () => {
 
     await switchTo('claude-opus-5-5', 'claude-haiku-5-5')
     await $.prompt.submit({ text: 'ok', wait: false, origin: { kind: 'composer' } })
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    await ui.redraw()
-    expect((await ui.find({ key: 'm-haiku' }))?.text).toContain('Haiku')
 
     // The person picks Opus in the app.
     await switchTo('claude-haiku-5-5', 'claude-opus-5-5')
-    await ui.redraw()
-    expect((await ui.find({ key: 'm-opus' }))?.text).toContain('Opus')
 
     await step($, 'medium')
     expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'low' })
-    await ui.unmount()
-  })
-})
-
-describe('two autos', () => {
-  test('Auto for model starts off: effort follows the judge and no model is suggested', async ($, on) => {
-    engine(on)
-    judgeSays(on, '{"model":"sonnet","effort":"low","why":"simple"}')
-    const ran = recordCommands(on)
-    const sent = recordSteps(on)
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    expect((await ui.find({ key: 'auto' }))?.text).toContain('Auto on')
-    expect((await ui.find({ key: 'auto-model' }))?.text).toContain('Auto off')
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    await ui.redraw()
-    expect(await ui.find({ key: 'accept' })).toBeUndefined()
-
-    await step($, 'medium')
-    expect(sent[0].effort).toBe('low')
-    expect(ran).toEqual([])
-    await ui.unmount()
-  })
-
-  test('Auto for effort off: the judge may still suggest a model, effort is left alone', async ($, on) => {
-    engine(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"simple"}')
-    const ran = recordCommands(on)
-    const mocked = mock.clock(on)
-    on('turn.complete', () => ({ text: '' }))
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    await ui.press({ key: 'auto' })
-    await ui.press({ key: 'auto-model' })
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    await ui.redraw()
-    expect(await ui.find({ key: 'accept' })).toBeDefined()
-
-    await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'completed' } as never)
-    await mocked.advance(10)
-    expect(ran).toEqual([])
-    await ui.unmount()
   })
 })
 
@@ -398,32 +323,6 @@ describe('typed commands', () => {
     })
     return filled
   }
-
-  test('a model click types /model into an empty box for you to send', async ($, on) => {
-    engine(on)
-    const filled = box(on, '')
-    const ran = recordCommands(on)
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-
-    await ui.press({ key: 'm-haiku' })
-
-    expect(filled).toEqual(['/model haiku'])
-    expect(ran).toEqual([])
-    await ui.unmount()
-  })
-
-  test('with a draft in the box nothing is overwritten and the mod runs the model switch itself', async ($, on) => {
-    engine(on)
-    const filled = box(on, 'ett halvskrivet meddelande')
-    const ran = recordCommands(on)
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-
-    await ui.press({ key: 'm-haiku' })
-
-    expect(filled).toEqual([])
-    expect(ran).toEqual(['/model haiku'])
-    await ui.unmount()
-  })
 
   test('an effort click sets the effort at once and also types /effort for the app', async ($, on) => {
     engine(on)
@@ -646,28 +545,6 @@ describe('footer text', () => {
     await expect($.ui.mount(DESK_BAND)).rejects.toThrow()
   })
 
-  test('a model suggestion still asks above the prompt on desktop', async ($, on) => {
-    engine(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"simple"}')
-    mock.clock(on)
-    const rows = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    await rows.press({ key: 'auto-model' })
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    const ask = await $.ui.mount(DESK_BAND)
-    expect(await ask.find({ key: 'accept' })).toBeDefined()
-    await ask.unmount()
-    await rows.unmount()
-  })
-
-  test('the model row is paused: effort only, unless EFFORTLESS_MODEL_UI=1', async ($, on) => {
-    engine(on, { EFFORTLESS_MODEL_UI: '0' })
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    expect(await ui.find({ key: 'e-high' })).toBeDefined()
-    expect(await ui.find({ key: 'm-opus' })).toBeUndefined()
-    expect(await ui.find({ key: 'auto-model' })).toBeUndefined()
-    await ui.unmount()
-  })
 })
 
 describe('helpers', () => {
@@ -996,44 +873,6 @@ describe('footer', () => {
     expect(ran).toEqual([])
   })
 
-  test('a different model is only suggested, and /effortless switch switches it', async ($, on) => {
-    engine(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"simple"}')
-    const ran = recordCommands(on)
-    const mocked = mock.clock(on)
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    await ui.press({ key: 'auto-model' })
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    await mocked.advance(10)
-    expect(ran.some(c => c.startsWith('/model'))).toBe(false)
-    await ui.redraw()
-    expect(await ui.find({ key: 'accept' })).toBeDefined()
-
-    await ui.press({ key: 'accept' })
-    expect(ran).toContain('/model haiku')
-    await ui.unmount()
-  })
-
-  test('Keep turns the suggestion down and it does not come back', async ($, on) => {
-    engine(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"simple"}')
-    recordCommands(on)
-    const mocked = mock.clock(on)
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    await ui.press({ key: 'auto-model' })
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    await mocked.advance(10)
-    await ui.redraw()
-    await ui.press({ key: 'decline' })
-    await $.prompt.submit({ text: 'hej igen', wait: false, origin: { kind: 'composer' } })
-    await mocked.advance(10)
-    await ui.redraw()
-
-    expect(await ui.find({ key: 'accept' })).toBeUndefined()
-    await ui.unmount()
-  })
 })
 
 describe('band', () => {
@@ -1116,25 +955,6 @@ describe('review fixes', () => {
     expect(sent[1].effort).toBe('low')
   })
 
-  test('/effortless switch switches to the suggested model and /effortless keep turns it down', async ($, on) => {
-    engine(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"simple"}')
-    const ran = recordCommands(on)
-    const mocked = mock.clock(on)
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    await ui.press({ key: 'auto-model' })
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    const result = await $.command.run({ command: 'effortless', args: 'switch' })
-    await mocked.advance(10)
-    expect(String(result.text)).toContain('haiku')
-    expect(ran).toContain('/model haiku')
-
-    await $.prompt.submit({ text: 'a new question about something else', wait: false, origin: { kind: 'composer' } })
-    const kept = await $.command.run({ command: 'effortless', args: 'keep' })
-    expect(String(kept.text)).toContain('Keeping')
-    await ui.unmount()
-  })
 })
 
 describe('judge choice (plugin settings)', () => {
@@ -1164,7 +984,6 @@ describe('judge choice (plugin settings)', () => {
       layout: 'default',
       compactWith: 'haiku',
       handoffButton: 'advised',
-      modelAuto: 'off',
       helpers: 'off',
       theme: 'violet',
       appearance: 'auto',
@@ -1728,7 +1547,7 @@ describe('handoff', () => {
 
   function handoffEngine(on: On, said: { role: string; text: string }[] = []) {
     mock.store(on)
-    mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+    mock.env(on, {})
     on('ui.status', () => ({ value: undefined }))
     on('session.messages', () => ({ value: said }) as never)
     on('session.model', () => ({ value: 'claude-opus-5-5' }))
@@ -1942,7 +1761,7 @@ describe('handoff', () => {
 
   test('the handoff is written by a fork: no turn in the chat, then cleared and sent', async ($, on) => {
     mock.store(on)
-    mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+    mock.env(on, {})
     on('ui.status', () => ({ value: undefined }))
     on('session.messages', () => ({ value: [] }) as never)
     on('session.model', () => ({ value: 'claude-opus-5-5' }))
@@ -1980,7 +1799,7 @@ describe('handoff', () => {
   test('without a fork (no reply yet, or it failed) the handoff is written as a turn, then cleared and sent', async ($, on) => {
     // engine() without its prompt.submit, so this test can see what the mod sends.
     mock.store(on)
-    mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+    mock.env(on, {})
     on('ui.status', () => ({ value: undefined }))
     on('session.messages', () => ({ value: [] }) as never)
     on('session.model', () => ({ value: 'claude-opus-5-5' }))
@@ -2014,7 +1833,7 @@ describe('handoff', () => {
 
   test('a fork that writes nothing says why: in a toast and in /effortless debug, and the turn takes over', async ($, on) => {
     mock.store(on)
-    mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+    mock.env(on, {})
     on('ui.status', () => ({ value: undefined }))
     on('session.messages', () => ({ value: [] }) as never)
     on('session.model', () => ({ value: 'claude-opus-5-5' }))
@@ -2446,17 +2265,11 @@ describe('settings panel', () => {
     await panel.press({ key: 'settings-back' })
     await panel.press({ key: 'settings-card-handoff' })
     await panel.select({ key: 'settings-skill', value: 'session-handoff' })
+    // Which model writes a compaction sits with the handoff settings.
+    expect(await panel.find({ key: 'settings-compact-with' })).toBeDefined()
     expect(await panel.find({ key: 'show-box-swamp' })).toBeDefined()
     expect(await panel.find({ key: 'show-box-cold' })).toBeDefined()
     await panel.press({ key: 'settings-back' })
-    // Model has its own card: two choices, and the card says which is on. Off by default.
-    expect(await drawn(panel)).toContain("Always the chat's")
-    await panel.press({ key: 'settings-card-model' })
-    await panel.press({ key: 'settings-model-on' })
-    // Compact with is a model choice: it lives here, not in the Handoff card.
-    expect(await panel.find({ key: 'settings-compact-with' })).toBeDefined()
-    await panel.press({ key: 'settings-back' })
-    expect(await drawn(panel)).toContain('Cheaper when it can')
     // The cards say what is set, unsaved changes included.
     expect(await drawn(panel)).toContain('Smarter · medium to max · helpers')
     expect(await drawn(panel)).toContain('/session-handoff · compact alert at')
@@ -2474,7 +2287,6 @@ describe('settings panel', () => {
     expect(set).toContainEqual({ key: 'effortless.effortBias', value: '1' })
     expect(set).toContainEqual({ key: 'effortless.effortFloor', value: 'medium' })
     expect(set).toContainEqual({ key: 'effortless.judge', value: 'jev' })
-    expect(set).toContainEqual({ key: 'effortless.modelAuto', value: 'on' })
     expect(set).toContainEqual({ key: 'effortless.helpers', value: 'on' })
     expect(said.join(' | ')).toContain('key saved')
     expect(files['/Users/x/.config/jev/.env']).toBe('OTHER=1\nTYPESAFE_API_KEY=tk-new\n')
@@ -2681,99 +2493,6 @@ describe('dashboard', () => {
     await guide.unmount()
   }
 
-  test('cache-aware routing, live through the hooks: a cold Sonnet is skipped on a big warm Opus chat, Haiku moves, a cold chat moves, and a routed reply leaves the countdown alone', { options: { modelAuto: 'on' } } as never, async ($, on) => {
-    engine(on)
-    const mocked = mock.clock(on)
-    on('session.usage', () => ({ value: { context: { tokens: 100_000, window: 1_000_000, percent: 10 } } }) as never)
-    let verdict = '{"model":"opus","effort":"high","why":"big refactor"}'
-    on('model.complete', () => ({ value: { isAnswered: true as const, text: verdict, usage: USAGE } }))
-    const sent: string[] = []
-    const used = { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 10_000, cache_creation: { ephemeral_1h_input_tokens: 10_000 } }
-    on('turn.step', async function* (_$, e) {
-      sent.push(e.model)
-      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: used } as never
-    })
-    await start($, on)
-    await closeSetup($, DESK_BAND)
-    await mocked.advance(16_000)
-    const ask = async (v: string, text: string) => {
-      verdict = v
-      await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
-      await step($)
-    }
-    const cacheLine = async () => String((await $.command.run({ command: 'effortless', args: 'debug' })).text).split(' | ').find(l => l.startsWith('cache:')) ?? ''
-    // A hard prompt on the chat's own model warms the Opus cache.
-    await ask('{"model":"opus","effort":"high","why":"big refactor"}', 'refactor the whole auth layer')
-    expect(sent.at(-1)).toBe('claude-opus-5-5')
-    // Sonnet has never answered: its cache is cold, and writing 100k tokens there costs more than reading them on Opus.
-    await ask('{"model":"sonnet","effort":"low","why":"small fix"}', 'rename this variable to userId')
-    expect(sent.at(-1)).toBe('claude-opus-5-5')
-    // A cold Haiku loses to a warm Opus read as well, whatever the size of the chat.
-    await mocked.advance(30 * 60_000)
-    await ask('{"model":"haiku","effort":"low","why":"lookup"}', 'what is the folder called')
-    expect(sent.at(-1)).toBe('claude-opus-5-5')
-    // An hour and more on, the Opus cache is cold too: staying would write it all again, so Sonnet is worth it now.
-    await mocked.advance(61 * 60_000)
-    await ask('{"model":"sonnet","effort":"low","why":"small fix"}', 'add a log line here')
-    expect(sent.at(-1)).toBe('claude-sonnet-5-5')
-    // Opus warm again, Sonnet warm from the last reply: the switch reads a warm cache and goes ahead.
-    await ask('{"model":"opus","effort":"high","why":"hard"}', 'debug the race in the queue')
-    expect(sent.at(-1)).toBe('claude-opus-5-5')
-    await ask('{"model":"sonnet","effort":"low","why":"small fix"}', 'fix the typo in the log line')
-    expect(sent.at(-1)).toBe('claude-sonnet-5-5')
-    // Twenty minutes on, a routed reply from the warm Sonnet must not restart the chat's countdown: Opus is still 40 min out.
-    await mocked.advance(20 * 60_000)
-    await ask('{"model":"sonnet","effort":"low","why":"small fix"}', 'fix another typo in the log line')
-    expect(sent.at(-1)).toBe('claude-sonnet-5-5')
-    expect(await cacheLine()).toContain('40 min left')
-  })
-
-  test('looksLikeRedo: a correction after a cheaper answer, not a thank-you or a new task', () => {
-    for (const yes of ["no, that's wrong", 'Nope. still fails on line 3', 'wrong, it is the other file', "that doesn't work", 'still broken', 'try again please', 'funkar inte', 'fel, det ska vara src', 'inte rätt', "it still doesn't compile"])
-      expect(looksLikeRedo(yes)).toBe(true)
-    for (const no of ['no problem, thanks', 'nothing else to fix', 'now add a test for it', 'looks right, ship it', 'what does this function do', 'normal', 'felsök det här', 'ok'])
-      expect(looksLikeRedo(no)).toBe(false)
-  })
-
-  test('a redone cheaper answer: the retry and the next prompts stay on the chat model, and stats count it', { options: { modelAuto: 'on' } } as never, async ($, on) => {
-    engine(on)
-    const mocked = mock.clock(on)
-    on('session.usage', () => ({ value: { context: { tokens: 100_000, window: 1_000_000, percent: 10 } } }) as never)
-    let verdict = '{"model":"opus","effort":"high","why":"big refactor"}'
-    on('model.complete', () => ({ value: { isAnswered: true as const, text: verdict, usage: USAGE } }))
-    const sent: string[] = []
-    const used = { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 10_000, cache_creation: { ephemeral_1h_input_tokens: 10_000 } }
-    on('turn.step', async function* (_$, e) {
-      sent.push(e.model)
-      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: used } as never
-    })
-    await start($, on)
-    await closeSetup($, DESK_BAND)
-    await mocked.advance(16_000)
-    const HAIKU = '{"model":"haiku","effort":"low","why":"lookup"}'
-    const ask = async (v: string, text: string) => {
-      verdict = v
-      await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
-      await step($)
-    }
-    await ask('{"model":"opus","effort":"high","why":"big refactor"}', 'refactor the whole auth layer')
-    // Once the Opus cache has gone cold, a Haiku move is cheaper than writing it all again.
-    await mocked.advance(61 * 60_000)
-    await ask(HAIKU, 'what is the folder called')
-    expect(sent.at(-1)).toBe('claude-haiku-5-5')
-    // The person says it was wrong: the retry runs on Opus, and so do the next ones, though the judge still says Haiku.
-    await ask(HAIKU, "no that's wrong, it is the src folder")
-    expect(sent.at(-1)).toBe('claude-opus-5-5')
-    for (let i = 1; i < REDO_STAY_PROMPTS; i++) {
-      await ask(HAIKU, `which file holds the config number ${i}`)
-      expect(sent.at(-1)).toBe('claude-opus-5-5')
-    }
-    await ask(HAIKU, 'what is the folder for the tests')
-    expect(sent.at(-1)).toBe('claude-haiku-5-5')
-    const stats = String((await $.command.run({ command: 'effortless', args: 'stats' })).text)
-    expect(stats).toContain('Cheaper model: 2 prompts moved down, 1 redone (50 %)')
-  })
-
   test('light appearance: surfaces come out pale, text reads on them, alpha and hue are kept', () => {
     const lum = (hex: string) => {
       const n = parseInt(hex.slice(1, 7), 16)
@@ -2935,35 +2654,6 @@ describe('dashboard', () => {
     expect(await debug()).toContain('last request: app asked claude-opus-5-5 at xhigh, sent claude-opus-5-5 at xhigh (unchanged)')
     // The model that ran is also on a line of its own.
     expect((await debug()).split(String.fromCharCode(10)).at(-1)).toBe('model used: claude-opus-5-5 at xhigh')
-  })
-
-  test('a thank-you after a cheaper answer is not a redo', { options: { modelAuto: 'on' } } as never, async ($, on) => {
-    engine(on)
-    const mocked = mock.clock(on)
-    on('session.usage', () => ({ value: { context: { tokens: 100_000, window: 1_000_000, percent: 10 } } }) as never)
-    let verdict = '{"model":"opus","effort":"high","why":"big refactor"}'
-    on('model.complete', () => ({ value: { isAnswered: true as const, text: verdict, usage: USAGE } }))
-    const sent: string[] = []
-    const used = { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 10_000, cache_creation: { ephemeral_1h_input_tokens: 10_000 } }
-    on('turn.step', async function* (_$, e) {
-      sent.push(e.model)
-      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: used } as never
-    })
-    await start($, on)
-    await closeSetup($, DESK_BAND)
-    await mocked.advance(16_000)
-    const HAIKU = '{"model":"haiku","effort":"low","why":"lookup"}'
-    const ask = async (v: string, text: string) => {
-      verdict = v
-      await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
-      await step($)
-    }
-    await ask('{"model":"opus","effort":"high","why":"big refactor"}', 'refactor the whole auth layer')
-    await mocked.advance(61 * 60_000)
-    await ask(HAIKU, 'what is the folder called')
-    await ask(HAIKU, 'no problem, now what is the tests folder called')
-    expect(sent.at(-1)).toBe('claude-haiku-5-5')
-    expect(String((await $.command.run({ command: 'effortless', args: 'stats' })).text)).toContain('0 redone')
   })
 
   test("its lines: the effort, cache and context; the judge's reason and the last reply", () => {

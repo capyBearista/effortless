@@ -1,6 +1,6 @@
 # Planted-bug bench
 
-Measures how smart a Claude Code setup is against what it costs. Each of the 10 tasks in `tasks.json` plants one bug in
+Measures how smart a Claude Code setup is against what it costs. Each of the 8 tasks in `tasks.json` plants one bug in
 a fresh copy of this repo and hands Claude the bug report a user would write: the symptom only, no file, function or
 test names. A run counts as solved when `tests/` is untouched and the whole test suite passes afterwards.
 
@@ -13,8 +13,8 @@ Setups (`run.sh`, 5th argument):
 | `x` | the app at xhigh effort, effortless not loaded (not in the default set) |
 | `on` | the app at medium, effortless loaded from this repo with its defaults (Auto on) |
 
-Tasks: 3 easy (an inverted comparison), 4 medium (a swapped constant, an off-by-one, a regex), 3 hard (clamps in the
-wrong order, a cost formula that only goes wrong when two caches differ, a bug whose symptom shows in another function).
+Tasks: 3 easy (an inverted comparison), 3 medium (a swapped constant, an off-by-one), 2 hard (clamps in the wrong
+order, a bug whose symptom shows in another function).
 `fails` in each task lists the tests that catch it, for you only; the model never sees `tasks.json`.
 
 ## Run

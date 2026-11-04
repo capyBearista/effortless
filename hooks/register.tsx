@@ -74,12 +74,11 @@ let BRAND_HEAD = '#221c3a'
 let HOVER_BOX = '#2b2b2f'
 const EFFORT_LABELS: Record<Effort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
 
-// Auto is two switches. `isAuto` is effort (the name stays: it is what the store and state hold);
-// `isAutoModel` lets the judge suggest another model and starts off.
+// Auto: whether the judge picks the effort.
 const isAuto = atom({ plugin: 'effortless', key: 'isAuto' } as const, true)
 const JEV_TIMEOUT_MS = 3000
 const JEV_URL = 'https://api.typesafe.ai/v1/systemone'
-const EMPTY_SPENT: Spent = { prompts: 0, requests: 0, input: 0, write: 0, read: 0, out: 0, byEffort: {}, judge: { jev: 0, haiku: 0, ms: 0, tokens: 0 }, moved: 0, redone: 0 }
+const EMPTY_SPENT: Spent = { prompts: 0, requests: 0, input: 0, write: 0, read: 0, out: 0, byEffort: {}, judge: { jev: 0, haiku: 0, ms: 0, tokens: 0 } }
 const SWITCHED_MS = 2500
 // The prompt cache lives this long after the last request read or wrote it. A response may say which lifetime its
 // cache writes got (usage.cache_creation: ephemeral_1h / ephemeral_5m); until one does, 1 hour is assumed: 99% of
@@ -104,10 +103,8 @@ const SLATE_BG = '#12141b'
 const SLATE_EDGE = '#39415a'
 const YELLOW = '#e0a33a'
 const RED = '#e5534b'
-const isAutoModel = atom({ plugin: 'effortless', key: 'isAutoModel' } as const, false)
 const pick = atom({ plugin: 'effortless', key: 'pick' } as const, null)
 const isJudging = atom({ plugin: 'effortless', key: 'isJudging' } as const, false)
-const suggestion = atom({ plugin: 'effortless', key: 'suggestion' } as const, null)
 const appEffort = atom({ plugin: 'effortless', key: 'appEffort' } as const, null)
 const model = atom({ plugin: 'effortless', key: 'model' } as const, null)
 // The last change Auto made to the effort, shown for a moment as "Low → High" and then cleared.
@@ -184,13 +181,12 @@ const installedSkills = atom({ plugin: 'effortless', key: 'installedSkills' } as
 const settingsDraft = atom({ plugin: 'effortless', key: 'settingsDraft' } as const, {})
 const judgeDown = atom({ plugin: 'effortless', key: 'judgeDown' } as const, null)
 // Which part of the settings panel is open: null for the cards.
-type SettingsCard = 'effort' | 'model' | 'judge' | 'handoff' | 'show' | 'models'
+type SettingsCard = 'effort' | 'judge' | 'handoff' | 'show' | 'models'
 const settingsCard = atom({ plugin: 'effortless', key: 'settingsCard' } as const, null)
 /** The settings panel's parts: a card each on the overview, and what the part is for, said once it is open. */
 const CARDS: readonly { id: SettingsCard; title: string; about: string }[] = [
   { id: 'effort', title: 'Effort', about: 'How hard Claude thinks. The slider tips close calls; Min and Max are hard limits.' },
-  { id: 'model', title: 'Model', about: "Whether a simple prompt may run on a cheaper model, and which model writes a compaction." },
-  { id: 'handoff', title: 'Handoff & alerts', about: 'The full handoff skill, when to suggest compacting, and which alerts show.' },
+  { id: 'handoff', title: 'Handoff & alerts', about: 'The full handoff skill, which model writes a compaction, when to suggest compacting, and which alerts show.' },
   { id: 'show', title: 'Customize', about: 'How effortless looks and which parts it shows. Uninstall removes it.' },
   { id: 'judge', title: 'Judge', about: 'Haiku judges prompts and handoffs. Add decision models for quicker effort calls. Test checks they answer.' },
 ]
@@ -198,11 +194,6 @@ const CARDS: readonly { id: SettingsCard; title: string; about: string }[] = [
 const MODELS_PART = { id: 'models', title: 'Models', about: 'Asked in order until one answers; Haiku judges when none does. ↑ moves one earlier.' } as const
 /** A part's name and what it does, sub-parts included. */
 const partOf = (card: SettingsCard) => (card === 'models' ? MODELS_PART : CARDS.find(c => c.id === card))
-// The Model card: the two ways to run. Effort follows the judge in both.
-const MODEL_CHOICES = [
-  { value: 'on', label: 'Cheaper when it can', tag: 'experimental', about: "A simple prompt may run on Haiku or Sonnet. Rarely pays: the other model has to reread the whole chat." },
-  { value: 'off', label: "Always the chat's", tag: '', about: "Every prompt keeps the model you picked. Only effort changes." },
-] as const
 const BIAS_WORDS = ['Cheapest', 'Cheaper', 'Balanced', 'Smarter', 'Smartest'] as const
 // The settings panel's judge test: running, or what it found. Null before a test and once the panel closes.
 const judgeTest = atom({ plugin: 'effortless', key: 'judgeTest' } as const, null)
@@ -628,8 +619,6 @@ export type JudgeConfig = {
   compactWith: 'haiku' | 'session'
   /** advised: the footer slot is Compact until Haiku advises a handoff. always: it is always the Handoff button. */
   handoffButton: 'advised' | 'always'
-  /** A prompt the judge calls simple runs on a cheaper model than the chat's (never a dearer one). */
-  modelAuto: 'on' | 'off'
   /** on: every subagent the chat sends off gets an effort picked by the judge before it starts. */
   helpers: 'on' | 'off'
   /** The accent colour of everything effortless draws: the brand violet, Claude orange or cherry-blossom rose. */
@@ -668,7 +657,6 @@ let config: JudgeConfig = {
   layout: 'default',
   compactWith: 'haiku',
   handoffButton: 'advised',
-  modelAuto: 'off',
   helpers: 'off',
   theme: 'violet',
   appearance: 'auto',
@@ -711,9 +699,6 @@ export function readConfig(options: unknown): JudgeConfig {
     layout: str(o.layout) === 'minimal' ? 'minimal' : 'default',
     compactWith: str(o.compactWith) === 'session' ? 'session' : 'haiku',
     handoffButton: str(o.handoffButton) === 'always' ? 'always' : 'advised',
-    // Off unless switched on: one prompt on another model rewrites the whole chat into that model's cache, which costs
-    // more than it saves in a chat that is in use (measured 2026-10-10).
-    modelAuto: str(o.modelAuto) === 'on' ? 'on' : 'off',
     helpers: str(o.helpers) === 'on' ? 'on' : 'off',
     theme: THEMES.find(t => t === str(o.theme)) ?? 'violet',
     appearance: (['dark', 'light'] as const).find(a => a === str(o.appearance)) ?? 'auto',
@@ -1053,13 +1038,10 @@ async function modelIs($: EngineInterface, id: string) {
   const key = keyOf(id)
   if (!key || key === (await read($, model))) return
   await update($, model, () => key)
-  // The engine's effort can differ per model, so a change across a switch is not the person's doing;
-  // and a model turned down earlier may be suggested again.
+  // The engine's effort can differ per model, so a change across a switch is not the person's doing.
   engineEffort = undefined
-  declined = null
   const current = await read($, pick)
   if (current && current.model !== key) await choose($, { ...current, model: key })
-  if ((await read($, suggestion)) === key) await update($, suggestion, () => null)
 }
 
 async function sessionModel($: EngineInterface): Promise<ModelKey> {
@@ -1077,7 +1059,6 @@ type EnvAsk = Promise<string | undefined> | undefined
 let askLog: EnvAsk
 let askTemp: EnvAsk
 let askTmpdir: EnvAsk
-let askModelUi: EnvAsk
 let askJevUrl: EnvAsk
 let askJevKey: EnvAsk
 let askOpenRouterKey: EnvAsk
@@ -1086,7 +1067,6 @@ let askHome: EnvAsk
 const envLog = ($: EngineInterface) => (askLog = askLog ?? $.env.get('EFFORTLESS_LOG'))
 const envTemp = ($: EngineInterface) => (askTemp = askTemp ?? $.env.get('TEMP'))
 const envTmpdir = ($: EngineInterface) => (askTmpdir = askTmpdir ?? $.env.get('TMPDIR'))
-const envModelUi = ($: EngineInterface) => (askModelUi = askModelUi ?? $.env.get('EFFORTLESS_MODEL_UI'))
 const envJevUrl = ($: EngineInterface) => (askJevUrl = askJevUrl ?? $.env.get('JEV_URL'))
 const envJevKey = ($: EngineInterface) => (askJevKey = askJevKey ?? $.env.get('TYPESAFE_API_KEY'))
 const envOpenRouterKey = ($: EngineInterface) => (askOpenRouterKey = askOpenRouterKey ?? $.env.get('OPENROUTER_API_KEY'))
@@ -1120,8 +1100,6 @@ let lastTyped = ''
 // The toast about pressing Enter is shown once; on every click it is only noise.
 let toldAboutEnter = false
 let lastFooter = ''
-// A model the person turned down; not suggested again until they pick something else.
-let declined: ModelKey | null = null
 
 /**
  * Types a slash command into the prompt box for the person to send with Enter. A command the person
@@ -1145,19 +1123,6 @@ async function typeCommand($: EngineInterface, text: string): Promise<boolean> {
   }
 }
 
-/** A model change reloads the context, so it only happens when the person says yes. */
-async function switchModel($: EngineInterface, model: ModelKey) {
-  try {
-    await $.command.run({ command: 'model', args: model })
-    declined = null
-    await update($, suggestion, () => null)
-    const current = await read($, pick)
-    if (current) await choose($, { ...current, model })
-  } catch {
-    $.ui.toast('Could not switch the model right now')
-  }
-}
-
 /**
  * The tally in its current shape. A hot reload keeps the state an older version wrote ({ requests, actual,
  * baseline } before 0.2.0), so every read goes through this.
@@ -1175,8 +1140,6 @@ export function asSpent(t: unknown): Spent {
     out: num(v.out),
     byEffort: v.byEffort && typeof v.byEffort === 'object' ? v.byEffort : {},
     judge: { jev: num(judged.jev), haiku: num(judged.haiku), ms: num(judged.ms), tokens: num(judged.tokens) },
-    moved: num(v.moved),
-    redone: num(v.redone),
     helpers: {
       runs: v.helpers?.runs && typeof v.helpers.runs === 'object' ? v.helpers.runs : {},
       requests: num(v.helpers?.requests),
@@ -1395,16 +1358,6 @@ export function resetLabel(iso: string | null, now: number): string {
   const at = new Date(iso)
   const hm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
   return at.getTime() - now < 20 * 3600_000 ? hm : `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][at.getDay()]} ${hm}`
-}
-
-/**
- * A message that says the last answer was wrong or did not work. After a prompt ran on a cheaper model, this is the
- * signal the cheaper model missed: the retry and the next few prompts stay on the chat's own model.
- */
-const REDO_RE = /^(no|nope|nah)(?![a-z'])(?! +(problem|worries|thanks|thank|need|rush|hurry))|^(that'?s |this is |it'?s )?(wrong|incorrect|not (right|correct|what i))|^(it |that |this )?(still )?(doesn'?t|didn'?t|isn'?t|does not|did not|is not) (work|fix|help|change|run|compile|pass)|^still (not|broken|wrong|failing|fails|the same|happening|doesn'?t)|^(not working|try again|do it again|redo|you missed|you forgot|you broke)|^(fel|inte rätt|funkar inte|fungerar inte|försök igen|gör om|det är fel)(?![a-zåäö])|(still (broken|wrong|failing)|try again|funkar fortfarande inte)/i
-export const REDO_STAY_PROMPTS = 4
-export function looksLikeRedo(text: string): boolean {
-  return REDO_RE.test(text.trim().replace(/^["'“ ]+/, ''))
 }
 
 /**
@@ -1915,7 +1868,6 @@ const SETTING_FIELDS = {
   layout: 'layout',
   compactWith: 'compactWith',
   handoffButton: 'handoffButton',
-  modelAuto: 'modelAuto',
   helpers: 'helpers',
   theme: 'theme',
   appearance: 'appearance',
@@ -1949,7 +1901,6 @@ async function saveSetting($: EngineInterface, field: keyof typeof SETTING_FIELD
     layout: config.layout,
     compactWith: config.compactWith,
     handoffButton: config.handoffButton,
-    modelAuto: config.modelAuto,
     helpers: config.helpers,
     theme: config.theme,
     appearance: config.appearance,
@@ -2241,7 +2192,7 @@ export function savedText(raw: Spent): string {
   const t = asSpent(raw)
   const judged = t.judge.jev + t.judge.haiku
   const helperRuns = EFFORTS.reduce((n, e) => n + (t.helpers.runs[e] ?? 0), 0)
-  if (t.prompts === 0 && judged === 0 && t.moved === 0 && helperRuns === 0) return 'nothing measured yet'
+  if (t.prompts === 0 && judged === 0 && helperRuns === 0) return 'nothing measured yet'
   const input = t.input * WEIGHT.input
   const write = t.write * WEIGHT.write
   const cached = t.read * WEIGHT.read
@@ -2256,9 +2207,6 @@ export function savedText(raw: Spent): string {
     return `${EFFORT_LABELS[e]} ${b.prompts}, average ${tokens(Math.round(b.cost / b.prompts))}`
   })
   if (per.length) lines.push(`Per prompt: ${per.join('; ')}`)
-  if (t.moved) {
-    lines.push(`Cheaper model: ${t.moved} prompt${t.moved === 1 ? '' : 's'} moved down, ${t.redone} redone (${share(t.redone, t.moved)})`)
-  }
   if (helperRuns) {
     const per = EFFORTS.filter(e => t.helpers.runs[e]).map(e => `${EFFORT_LABELS[e]} ${t.helpers.runs[e]}`)
     lines.push(`Helpers: ${helperRuns} subagent${helperRuns === 1 ? '' : 's'} (${per.join(', ')}), ${t.helpers.requests} requests, cost about ${tokens(Math.round(t.helpers.cost))} tokens`)
@@ -2330,12 +2278,10 @@ export function settingsSvg(color: string): string {
 
 /** The settings rows' icons, drawn in the cog's outline style (14 px, 1.3 stroke) rather than font glyphs, which
  * differ per font. */
-export function rowIconSvg(kind: 'effort' | 'model' | 'judge' | 'handoff' | 'show' | 'quick' | 'full', color: string, onKnobToo = false): string {
+export function rowIconSvg(kind: 'effort' | 'judge' | 'handoff' | 'show' | 'quick' | 'full', color: string, onKnobToo = false): string {
   const shapes = {
     // A gauge: an open arc with a needle.
     effort: '<path d="M2.6 10.4A5 5 0 1 1 11.4 10.4"/><path d="M7 8.2L9.6 5.2"/><circle cx="7" cy="8.6" r=".9"/>',
-    // Layers: the models, stacked.
-    model: '<path d="M7 2 12.2 4.7 7 7.4 1.8 4.7Z"/><path d="M1.8 7.3 7 10 12.2 7.3"/><path d="M1.8 9.9 7 12.6 12.2 9.9"/>',
     // Scales: a beam on a post, two pans.
     judge: '<path d="M7 2.4V11.6M4.4 11.6H9.6M2.6 4.2H11.4"/><path d="M2.6 4.2L1.2 7.6A1.5 1.5 0 0 0 4 7.6Z"/><path d="M11.4 4.2L10 7.6A1.5 1.5 0 0 0 12.8 7.6Z"/>',
     // An arrow into a bar: hand off.
@@ -2369,12 +2315,10 @@ function kTokens(n: number): string {
 }
 
 async function snap($: EngineInterface) {
-  const [auto, autoModel, current, judging, wanted, shownByApp, modelNow, switchedNow, pausedNow, cacheNow, compacting] = await Promise.all([
+  const [auto, current, judging, shownByApp, modelNow, switchedNow, pausedNow, cacheNow, compacting] = await Promise.all([
     read($, isAuto),
-    read($, isAutoModel),
     read($, pick),
     read($, isJudging),
-    read($, suggestion),
     read($, appEffort),
     read($, model),
     read($, switched),
@@ -2382,7 +2326,7 @@ async function snap($: EngineInterface) {
     read($, cacheLeft),
     read($, isCompacting),
   ])
-  return { auto, autoModel, current, judging, wanted, shownByApp, modelNow, switchedNow, pausedNow, cacheNow, compacting }
+  return { auto, current, judging, shownByApp, modelNow, switchedNow, pausedNow, cacheNow, compacting }
 }
 type Snap = Awaited<ReturnType<typeof snap>>
 
@@ -2449,44 +2393,6 @@ let classicStart: { at: number; said: string } | null = null
 let coldForced = false
 let handoffTimer: { cancel: () => void } | undefined
 const HANDOFF_POLL_MS = 1000
-// The model this prompt's requests run on when the judge picked a cheaper one than the chat's, else null. The chat's
-// own model stays as it is: each request is sent to the cheaper model in turn.step, so the chat model's cache stays warm
-// for the next prompt that needs it.
-let routed: ModelKey | null = null
-// Prompts left that stay on the chat's model, after a cheaper answer was redone.
-let stayUp = 0
-const MODEL_RANK: ModelKey[] = ['haiku', 'sonnet', 'opus', 'fable']
-/** The model a verdict sends this prompt to: a cheaper one than the chat's, or null for the chat's own. Never Fable. */
-export function routeTo(verdict: ModelKey, inUse: ModelKey): ModelKey | null {
-  if (verdict === 'fable') return null
-  return MODEL_RANK.indexOf(verdict) < MODEL_RANK.indexOf(inUse) ? verdict : null
-}
-
-// What one input token costs on each model, in Sonnet's price: Opus about 2x (measured: the same prompt cost 1.97x on Opus), Haiku about a third. These are the ratios
-// the savings estimate uses; they only have to be right enough to tell which side of a switch is cheaper.
-export const MODEL_PRICE: Record<ModelKey, number> = { haiku: 1 / 3, sonnet: 1, opus: 2, fable: 5 }
-/**
- * Whether sending this one prompt to a cheaper model pays. The chat's context is read from the cache (a tenth of the input
- * price) where that model's cache is warm, and written to it (1.25 times) where it is cold. A switch to a cold model
- * writes the whole context first, which can cost more than staying on the chat's own warm one at a low effort.
- */
-export function routeWorth(to: ModelKey, inUse: ModelKey, contextTokens: number, warm: { to: boolean; inUse: boolean }): boolean {
-  if (!(contextTokens > 0)) return true
-  // Claude Code writes the 1-hour cache, which costs twice the input price (measured), not the 5-minute 1.25.
-  const write = 2
-  const stay = contextTokens * MODEL_PRICE[inUse] * (warm.inUse ? WEIGHT.read : write)
-  const move = contextTokens * MODEL_PRICE[to] * (warm.to ? WEIGHT.read : write)
-  return move < stay
-}
-// Until when each model's prompt cache is warm for this chat: set by every main response on it.
-const warmUntil: Partial<Record<ModelKey, number>> = {}
-// On the mod's clock, the same one the cache countdown runs on.
-function markWarm(modelId: string, usage: unknown, now: number) {
-  const key = keyOf(modelId)
-  if (key) warmUntil[key] = now + CACHE_TTL[cacheTtlOf(usage) ?? '5m']
-}
-const isWarm = (key: ModelKey, now: number) => (warmUntil[key] ?? 0) > now
-
 // When Haiku last wrote a compaction (for /effortless debug).
 let lastHaikuCompact = 0
 
@@ -2559,7 +2465,7 @@ type TerminalBand = { key: string; kind: ArtKind; color: string; bg: string; edg
  * row under it, so effort stays in sight while a band shows. */
 async function terminalBand($: EngineInterface, e: RenderInput<'AbovePrompt'>, b: TerminalBand) {
   const { Box, Text } = themedEls($.ui.resolve(e))
-  const { rows } = await effortRows($, e, { auto: !b.autoInBar })
+  const rows = await effortRows($, e, { auto: !b.autoInBar })
   return (
     <Box key={`${b.key}-col`} flexDirection="column">
       <Box key={b.key} flexDirection="row" gap={1} alignItems="center" paddingX={1} backgroundColor={b.bg} borderStyle="round" borderColor={b.edge}>
@@ -3274,8 +3180,8 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
               word looked cheap: another font, a late start and a jump back to the text. */}
           <Text key="dash-level" color={wordColor} bold>{v.judging && Svg ? 'Deciding' : what}</Text>
           {/* The model this prompt runs on, dim, after the effort: the judge's routing to a cheaper model shows as it happens. */}
-          {!v.judging && v.auto && MODELS.find(m => m.key === (routed ?? v.modelNow)) ? (
-            <Text key="dash-model" color={DASH_DIM}>{` · ${MODELS.find(m => m.key === (routed ?? v.modelNow))!.label}`}</Text>
+          {!v.judging && v.auto && MODELS.find(m => m.key === v.modelNow) ? (
+            <Text key="dash-model" color={DASH_DIM}>{` · ${MODELS.find(m => m.key === v.modelNow)!.label}`}</Text>
           ) : null}
           {/* While the judge decides: the progress bar's thinking dots, as a plain image (its CSS still runs, and a
               redraw does not restart it the way an interactive frame does). */}
@@ -3363,51 +3269,16 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   )
 }
 
-/** The terminal's rows above the prompt (Effort steps, Auto, the model row when switched on) and, on any surface, the
- * judge's question when it suggests another model. The rows also sit under an alert band, so effort never goes away. */
+/** The terminal's rows above the prompt: the Effort steps, Auto and who picked. They also sit under an alert band, so
+ * effort never goes away. */
 async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opts: { auto?: boolean } = {}) {
   const { Box, Text, Button } = themedEls($.ui.resolve(e))
   const v = await snap($)
-  const { auto, autoModel, current, judging, wanted, shownByApp } = v
+  const { auto, current, judging, shownByApp } = v
   const inUse = v.modelNow ?? (await sessionModel($))
   const effortNow = effortOf(v, inUse)
-  // The model row is paused: effort first. EFFORTLESS_MODEL_UI=1 brings it back.
-  const showModel = (await envModelUi($)) === '1'
-
   const setEffort = (level: Effort) => () => pickEffort($, level)
-  // Picking a model yourself turns off Auto for model alone; accepting a suggestion leaves it on.
-  const setModel = (model: ModelKey) => async () => {
-    await update($, isAutoModel, () => false)
-    await $.store.set('isAutoModel', false)
-    await changeModel(model)
-  }
-  // The person sends /model, so the app's own control moves too; with a draft in the box the mod runs it.
-  const changeModel = async (model: ModelKey) => {
-    if (await typeCommand($, `/model ${model}`)) return
-    await switchModel($, model)
-  }
-  const acceptSuggestion = (model: ModelKey) => () => changeModel(model)
-  const toggleAutoModel = async () => {
-    const turnOn = !(await read($, isAutoModel))
-    await update($, isAutoModel, () => turnOn)
-    await $.store.set('isAutoModel', turnOn)
-    if (!turnOn) await update($, suggestion, () => null)
-  }
-  const dismiss = async () => {
-    declined = wanted
-    await update($, suggestion, () => null)
-  }
-
-  const question = wanted ? (
-    <Box flexDirection="column">
-      <Box flexDirection="row" gap={1} alignItems="center">
-        <Text>Switch to {MODELS.find(m => m.key === wanted)?.label}? The context reloads.</Text>
-        <Button key="accept" variant="primary" label="Switch" onPress={acceptSuggestion(wanted)} />
-        <Button key="decline" label="Keep" onPress={dismiss} />
-      </Box>
-    </Box>
-  ) : null
-  if (e.surface !== 'terminal') return { question, rows: null }
+  if (e.surface !== 'terminal') return null
 
   const notAligned = current && inUse !== 'haiku' && shownByApp && shownByApp !== current.effort
   const note = judging
@@ -3419,29 +3290,8 @@ async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opt
         : auto
           ? 'Picks the effort at the next prompt'
           : 'Pick an effort'
-  const modelRow = (
-    <Box flexDirection="row" alignItems="center" gap={1}>
-      {MODELS.map(m =>
-        m.key === inUse ? (
-          <Button key={`m-${m.key}`} variant="primary" label={m.label} onPress={setModel(m.key)} />
-        ) : (
-          <Button key={`m-${m.key}`} plain dimColor label={m.label} onPress={setModel(m.key)} />
-        ),
-      )}
-      <Box flexGrow={1} />
-      <Button
-        key="auto-model"
-        hotkey="m"
-        variant={autoModel ? 'primary' : undefined}
-        label={autoModel ? 'Auto on' : 'Auto off'}
-        onPress={toggleAutoModel}
-      />
-    </Box>
-  )
   const rows = (
     <Box flexDirection="column">
-      {question}
-      {showModel ? modelRow : null}
       <Box flexDirection="row" gap={1} alignItems="center">
         {/* The word never breaks: the note at the end gives way first. */}
         <Box flexShrink={0}>
@@ -3472,7 +3322,7 @@ async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opt
       </Box>
     </Box>
   )
-  return { question, rows }
+  return rows
 }
 
 // --- The agent panel (hooks/agents.tsx): the $ side, kept short ------------------------------------------------------
@@ -3679,13 +3529,12 @@ export const register: Register = (on, options) => {
     sessionStarted = Date.now()
     // Everything the first draw needs, asked for at once: one after the other they held the start (and with it the
     // band) for a second or more. What the draw does not need runs after, unawaited.
-    const [sid, kept, kff, orKff, storedAuto, storedAutoModel, storedPick, setupDone] = await Promise.all([
+    const [sid, kept, kff, orKff, storedAuto, storedPick, setupDone] = await Promise.all([
       $.session.id().catch(() => '?'),
       $.store.get('savedSettings').catch(() => null),
       $.store.get('keyFromFile').catch(() => null),
       $.store.get('orKeyFromFile').catch(() => null),
       $.store.get('isAuto').catch(() => null),
-      $.store.get('isAutoModel').catch(() => null),
       $.store.get('pick').catch(() => null) as Promise<Pick | null>,
       $.store.get('setupDone').catch(() => null),
     ])
@@ -3701,7 +3550,6 @@ export const register: Register = (on, options) => {
     for (const w of timingWarnings(pluginOptions)) $.ui.toast(`effortless: ${w}`)
     await Promise.all([
       typeof storedAuto === 'boolean' ? update($, isAuto, () => storedAuto) : null,
-      typeof storedAutoModel === 'boolean' ? update($, isAutoModel, () => storedAutoModel) : null,
       // Auto off means the effort you chose should still be the one in force.
       storedAuto === false && storedPick && EFFORTS.includes(storedPick.effort) ? update($, pick, () => storedPick).then(() => { pickCarried = true }) : null,
       // The first time the mod runs, the setup guide opens above the prompt.
@@ -3779,7 +3627,6 @@ export const register: Register = (on, options) => {
   // started; this hook answers it, and the file's text never reaches the model. Both spellings the app may use.
   on('command.run', async ($, e, next) => {
     if (e.command !== 'effortless' && e.command !== 'effortless:effortless') return next(e)
-    const wanted = await read($, suggestion)
     const arg = e.args.trim().toLowerCase()
     if (arg === 'agents' || arg === 'agents demo') {
       if (arg === 'agents demo') {
@@ -3850,7 +3697,6 @@ export const register: Register = (on, options) => {
           `handoff: ${await read($, handoffStage)}`,
           `last fork: ${lastFork ? `${lastFork.outcome}, ${ago(lastFork.at)}` : 'none'}`,
           `hidden: ${config.hide.join(',') || 'nothing'}`,
-          `model: ${config.modelAuto === 'on' ? `cheaper when it can, now ${routed ?? 'the chat\'s'}` : 'always the chat\'s'}`,
           lastRequest
             ? `last request: app asked ${lastRequest.appModel} at ${lastRequest.appEffort ?? 'none'}, sent ${lastRequest.model} at ${lastRequest.effort ?? 'none'}${lastRequest.model === lastRequest.appModel && lastRequest.effort === lastRequest.appEffort ? ' (unchanged)' : ' (changed by effortless)'}, ${ago(lastRequest.at)}`
             : 'last request: none yet',
@@ -3879,14 +3725,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       return { text: 'The cache shows as cold now (a test). Compact is in the footer. The next response restarts the countdown.' }
     }
     if (arg === 'stats' || arg === 'saved') return { text: `Auto, this session:\n${savedText(await read($, saved))}` }
-    if (!wanted) return { text: 'No model suggestion right now.' }
-    if (arg === 'switch') {
-      $.clock.after(0, () => void switchModel($, wanted))
-      return { text: `Switching to ${wanted}. The context reloads.` }
-    }
-    declined = wanted
-    await update($, suggestion, () => null)
-    return { text: `Keeping the current model.` }
+    return { text: 'Try /effortless settings, debug, handoff [full], setup, auto, stats, save, cold, swamp, hot or down.' }
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -3899,12 +3738,11 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     // The handoff check runs for every message the person types, whatever the effort judge is doing (or whether Auto is on).
     if (byPerson && !e.text.trim().startsWith('/') && !isFollowUp(e.text)) void checkHandoff($, e.text).catch(() => undefined)
     const wantsEffort = await read($, isAuto)
-    const wantsModel = await read($, isAutoModel)
     // A typed slash command is judged only when it is a skill or a custom command (what the person added); the app's own
     // (/compact, /clear, /model) and effortless's never are. The judge is told what the command is, since its name alone says little.
     const slash = e.text.trim().startsWith('/')
     const skill = slash && byPerson ? await typedSkill($, e.text) : undefined
-    if (!byPerson || (slash && !skill) || (!wantsEffort && !wantsModel)) return next(e)
+    if (!byPerson || (slash && !skill) || !wantsEffort) return next(e)
     // On a model where an effort change rewrites the cache, Auto waits instead of judging.
     const modelId = await $.session.model()
     await modelIs($, modelId)
@@ -3934,7 +3772,6 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
         heldPick = null
         await choose($, applied)
       }
-      if (!midTurn && routed) routed = null
       await countPrompt($, inUse !== 'haiku' ? named : undefined, 'named', 0, 0)
       void proof($, `named level ${named} in "${e.text.slice(0, 50)}": no judge`)
       $.ui.invalidate('ui.render')
@@ -3987,40 +3824,6 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
             await choose($, applied)
           }
         }
-        // A prompt the judge calls simple runs on a cheaper model; a message typed mid-turn leaves the running choice.
-        if (!midTurn) {
-          let to = wantsEffort && config.modelAuto === 'on' ? routeTo(verdict.model, inUse) : null
-          // The last prompt ran on a cheaper model and this one says it was wrong: that is a miss. The retry runs on the
-          // chat's own model, and so do the next few prompts.
-          if (routed && looksLikeRedo(e.text)) {
-            stayUp = REDO_STAY_PROMPTS
-            await update($, saved, old => ({ ...asSpent(old), redone: asSpent(old).redone + 1 }))
-            void proof($, `redo after ${routed}: the next ${REDO_STAY_PROMPTS} prompts stay on ${inUse}`)
-          }
-          if (stayUp > 0) {
-            stayUp--
-            if (to) void proof($, `stays on ${inUse}: a cheaper answer was just redone (${stayUp} more)`)
-            to = null
-          }
-          // A switch to a model whose cache is cold writes the whole chat to it: stay when that costs more than it saves.
-          const now = await $.clock.now().catch(() => Date.now())
-          if (to && !routeWorth(to, inUse, lastContext?.tokens ?? 0, { to: isWarm(to, now), inUse: !(cacheExpires > 0 && now >= cacheExpires) })) {
-            void proof($, `stays on ${inUse}: ${to} has a cold cache, switching would cost more`)
-            to = null
-          }
-          if (to) await update($, saved, old => ({ ...asSpent(old), moved: asSpent(old).moved + 1 }))
-          if (to !== routed) {
-            routed = to
-            void proof($, to ? `this prompt runs on ${to} (the chat is on ${inUse})` : `back on ${inUse}`)
-            $.ui.invalidate('ui.render')
-          }
-        }
-        if (wantsModel && verdict.model !== inUse && verdict.model !== declined) {
-          await update($, suggestion, () => verdict.model)
-          $.ui.toast(`Suggestion: switch to ${verdict.model}? /effortless switch or /effortless keep`)
-        } else if (verdict.model === inUse) {
-          await update($, suggestion, () => null)
-        }
       }
     } finally {
       // A judge that failed or threw ends the glow here.
@@ -4043,9 +3846,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       if (e.agentId === undefined) lastRequest = { index: e.index, appModel: e.model, appEffort: e.effort, model: request.model, effort: request.effort, at: Date.now() }
       const answer = yield* next(request)
       // Inside the hook ($ calls after it returns are refused), and never allowed to break the request.
-      if (e.agentId === undefined && answer?.usage) markWarm(request.model, answer.usage, await $.clock.now().catch(() => Date.now()))
-      // A prompt run on a cheaper model leaves the chat's own cache as it was: only the chat's model restarts the countdown.
-      if (e.agentId === undefined && answer?.usage && request.model === e.model) await cacheTouched($, answer.usage).catch(() => undefined)
+      if (e.agentId === undefined && answer?.usage) await cacheTouched($, answer.usage).catch(() => undefined)
       if (e.agentId === undefined && answer?.usage) turnCost += weighted(answer.usage)
       if (e.agentId !== undefined && answer?.usage) await agentCost($, e.agentId, weighted(answer.usage)).catch(() => undefined)
       return answer
@@ -4082,16 +3883,6 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       }
       if (e.index === 0) void proof($, `full handoff: request ${e.index} (${e.model}) at ${handoffEffort}, was ${e.effort}`)
       return yield* send({ ...e, effort: handoffEffort })
-    }
-    // The judge put this prompt on a cheaper model: each of its requests goes there, at the picked effort.
-    if (e.agentId === undefined && routed && (await read($, isAuto))) {
-      const to = MODELS.find(m => m.key === routed)!.id
-      const picked = await read($, pick)
-      const effort = picked?.effort ?? e.effort
-      void proof($, `request ${e.index}: ${e.model} -> ${to} at ${effort}`)
-      const result = yield* send({ ...e, model: to, effort })
-      if (picked && picked.by !== 'manual' && result.usage) await tally($, picked.effort, result.usage)
-      return result
     }
     // A helper the judge picked an effort for at its spawn runs every request at it. Haiku takes no effort.
     if (e.agentId !== undefined && config.helpers === 'on' && typeof e.effort === 'string' && keyOf(e.model) !== 'haiku') {
@@ -4414,7 +4205,6 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
         layout: draft.layout ?? config.layout,
         compactWith: draft.compactWith ?? config.compactWith,
         handoffButton: draft.handoffButton ?? config.handoffButton,
-        modelAuto: draft.modelAuto ?? config.modelAuto,
         helpers: draft.helpers ?? config.helpers,
         theme: draft.theme ?? config.theme,
         appearance: draft.appearance ?? config.appearance,
@@ -4447,7 +4237,6 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
         : hasKey || shown.judge === 'jev' ? 'Haiku + Jev' : 'Haiku'
       const summaries: Record<SettingsCard, string> = {
         effort: `${BIAS_WORDS[shown.bias + 2]} · ${shown.floor} to ${shown.ceiling}${shown.helpers === 'on' ? ' · helpers' : ''}`,
-        model: shown.modelAuto === 'on' ? 'Cheaper when it can' : "Always the chat's",
         judge: tested && tested.ok !== null ? `${judgeName} · ${tested.ok ? 'working' : 'failing'}` : judgeName,
         models: chain.map(routeLabel).join(' → ') || 'None',
         handoff: `${shown.handoffSkill ? `/${shown.handoffSkill}` : 'Built in'} · compact alert at ${shown.swampAt}%`,
@@ -4759,23 +4548,13 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
             ...(tested && tested.ok !== null
               ? [<Text key="settings-judge-result" color={tested.ok ? '#7fd49b' : '#ff8a80'} wrap="truncate">{`${tested.ok ? '✓' : '✗'} ${tested.text}`}</Text>]
               : []),
-]) : card === 'model' ? (bare ? [] : MODEL_CHOICES.map(c => (
-            <Box key={`model-${c.value}`} flexDirection="column" flexGrow={1} flexShrink={1} minWidth={26}>
-              <Box flexDirection="row" gap={1} alignItems="center">
-                <Button key={`settings-model-${c.value}`} plain label={`${shown.modelAuto === c.value ? '◉' : '○'} ${c.label}`} onPress={() => set('modelAuto')(c.value)} />
-                {/* A warning in the cache countdown's yellow: this choice rarely pays. */}
-                {c.tag ? <Text key={`model-tag-${c.value}`} color={YELLOW} bold>{`⚠ ${c.tag}`}</Text> : null}
-              </Box>
-              <Text dimColor wrap="wrap">{c.about}</Text>
-            </Box>
-          )).concat([
-            // Which model writes a compaction's summary: a model choice, so it sits with the others.
-            pick({ key: "settings-compact-with", label: "Compact with", value: shown.compactWith, options: [{ value: 'haiku', label: 'Haiku 5.5' }, { value: 'session', label: "Chat's model" }], onSelect: set('compactWith') }),
-          ])) : card === 'handoff' ? (bare ? [] : [
+]) : card === 'handoff' ? (bare ? [] : [
             pick({ key: "settings-skill", label: "Handoff skill", value: shown.handoffSkill || '-', options: [
                 { value: '-', label: 'effortless (built in)' },
                 ...[...new Set([...(shown.handoffSkill ? [shown.handoffSkill] : []), ...skillNames])].map(name => ({ value: name, label: `/${name}` })),
               ], onSelect: v => set('handoffSkill')(v === '-' ? '' : v) }),
+            // Which model writes a compaction's summary.
+            pick({ key: "settings-compact-with", label: "Compact with", value: shown.compactWith, options: [{ value: 'haiku', label: 'Haiku 5.5' }, { value: 'session', label: "Chat's model" }], onSelect: set('compactWith') }),
             pick({ key: "settings-swamp", label: "Compact alert at", value: shown.swampAt, options: SWAMP_STEPS.map(n => ({ value: String(n), label: `${n}%` })), onSelect: set('swampAt') }),
             pick({ key: "settings-handoff-button", label: "Handoff button", value: shown.handoffButton, options: [{ value: 'advised', label: 'When advised' }, { value: 'always', label: 'Always' }], onSelect: set('handoffButton') }),
             ...alertToggles,
@@ -5364,21 +5143,11 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     }
     // At rest: the dashboard, unless the person picked the minimal look (the footer's buttons, no band).
     if (config.layout === 'default') {
-      if (e.surface === 'terminal') return dashboardBand($, e)
-      const { question } = await effortRows($, e)
-      const dash = await dashboardBand($, e)
-      return question ? (
-        <Box key="dash-col" flexDirection="column">
-          {question}
-          {dash}
-        </Box>
-      ) : dash
+      return dashboardBand($, e)
     }
     // The minimal look draws no dashboard: mark the rest here, so the next band plays its entrance.
     introKind = 'rest'
-    const { question, rows } = await effortRows($, e)
-    if (e.surface !== 'terminal') return question ?? next(e)
-    return rows
+    return (await effortRows($, e)) ?? next(e)
     } catch (error) {
       lastRenderError = (error instanceof Error ? error.message : String(error)).slice(0, 300)
       return next(e)

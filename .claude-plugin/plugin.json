@@ -109,16 +109,6 @@
       "description": "Comma-separated: handoff (the footer button), timer (the cache countdown), reason (the judge's line), swamp (the context alert), hot (the running-low alert), cold (the cold-cache alert). Empty shows everything. The judge's line is off unless switched on.",
       "default": "reason"
     },
-    "modelAuto": {
-      "type": "string",
-      "title": "Cheaper model when it can (experimental)",
-      "description": "on: a prompt the judge calls simple may run on a cheaper model (Haiku 5.5 or Sonnet), never above the chat's own, when the switch pays. It rarely does in a chat that is in use: the other model rereads the whole chat. off (default): every prompt runs on the chat's model.",
-      "default": "off",
-      "options": [
-        "on",
-        "off"
-      ]
-    },
     "helpers": {
       "type": "string",
       "title": "Effort for helpers",

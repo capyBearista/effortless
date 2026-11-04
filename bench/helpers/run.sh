@@ -18,7 +18,7 @@ git -C "$REPO" archive HEAD -o "$B/src.tar"
 # One config folder per setting, no login in either, so the API key is what pays.
 for h in on off; do
   mkdir -p "$B/cfg-h$h"
-  printf '{ "pluginConfigs": { "effortless@inline": { "options": { "helpers": "%s", "modelAuto": "off" } } } }\n' "$h" > "$B/cfg-h$h/settings.json"
+  printf '{ "pluginConfigs": { "effortless@inline": { "options": { "helpers": "%s" } } } }\n' "$h" > "$B/cfg-h$h/settings.json"
 done
 
 one() {

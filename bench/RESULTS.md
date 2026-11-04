@@ -1,6 +1,6 @@
 # Benchmarks
 
-Two benchmarks, each one you can run again. None is a lab result: small task sets, few runs. Read the limits under each.
+One benchmark you can run again. None is a lab result: small task sets, few runs. Read the limits under each.
 
 ## 1. How much does effortless save? (`bash bench/agentic/run.sh`)
 
@@ -43,27 +43,3 @@ Limits:
 - The judge (Haiku) adds about $0.001 to $0.002 per prompt and is not in the figures.
 
 Every run: `bench/results/agentic-2026-10-10.md` and `.json`.
-
-## 2. Why model switching is off (`node bench/quality.mjs`)
-
-An earlier version also moved simple prompts to Haiku or Sonnet. This benchmark measured the answers: 30 self-contained prompts, each answered on Opus and on the model and effort a router would pick (Haiku low for easy, Sonnet medium for normal, Opus high for hard), compared by a blind grader (Opus, high effort). Run 2026-10-09, one run each.
-
-| Against Opus medium | Routed good enough | Baseline cost | Routed cost | Saved |
-| --- | --- | --- | --- | --- |
-| easy (12) | 75% | $0.124 | $0.029 | 77% |
-| normal (12) | 100% | $0.284 | $0.115 | 60% |
-| hard (6, routed to Opus high) | 100% | $0.714 | $0.903 | -26% |
-| all (30) | 90% | $1.121 | $1.046 | 7% |
-
-| Against Opus high | Routed good enough | Baseline cost | Routed cost | Saved |
-| --- | --- | --- | --- | --- |
-| easy (12) | 83% | $0.126 | $0.028 | 78% |
-| normal (12) | 100% | $0.329 | $0.113 | 66% |
-| hard (6, same model) | 100% | $1.164 | $1.164 | 0% |
-| all (30) | 93% | $1.620 | $1.306 | 19% |
-
-Those prompts started with no chat history, and that is what made the switch look cheap. In a real chat the context sits in the chat model's prompt cache, and each model keeps its own. A prompt moved to another model has to write the whole chat into that model's cache first, at twice the input price (Claude Code writes the 1-hour cache). Measured on 2026-10-10 with an 80k-token chat: from a warm Opus chat, one prompt on Haiku costs about 5 times what staying on Opus does, and about 10 times on Sonnet. Switching only pays once the chat model's cache has gone cold, or for a long run of prompts on the cheaper model.
-
-So "Cheaper model when it can" is off by default since 1.68.9 and marked experimental. The saving that holds up in a real chat is effort: benchmark 1.
-
-Details per case: `bench/results/quality-202610091528.md` (vs high) and `quality-202610091911-vs-opus-medium.md`, with the .json beside each.

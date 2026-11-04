@@ -12,9 +12,6 @@ export type Spent = {
   byEffort: Partial<Record<Effort, { prompts: number; cost: number }>>
   /** How often each judge decided, the time it took in all (ms), and its tokens. */
   judge: { jev: number; haiku: number; ms: number; tokens: number }
-  /** Prompts that ran on a cheaper model than the chat's, and how many of those the person then redid. */
-  moved: number
-  redone: number
   /** Subagents the judge picked an effort for: how many per effort, their requests, and what those cost (weighted). */
   helpers: { runs: Partial<Record<Effort, number>>; requests: number; cost: number }
 }
@@ -67,8 +64,6 @@ export type SettingsDraft = {
   compactWith?: string
   /** advised (the slot is Compact until Haiku advises a handoff) or always (the slot is the Handoff button). */
   handoffButton?: string
-  /** on: a prompt the judge calls simple runs on a cheaper model than the chat's; off: always the chat's model. */
-  modelAuto?: string
   /** on: each subagent gets an effort picked by the judge before it starts; off: it runs at the chat's effort. */
   helpers?: string
   /** violet (the brand), orange (Claude's) or rose (cherry blossom). */
@@ -199,11 +194,8 @@ declare module 'claude-code' {
       setupStep: 'pick' | 'jev' | 'lean' | 'handoff' | 'done' | null
       /** Choices made in the setup guide, saved together at Done or the cross. */
       setupDraft: SettingsDraft
-      /** Auto on model: the judge may suggest another model (never switched without a yes). Off by default. */
-      isAutoModel: boolean
       pick: Pick | null
       isJudging: boolean
-      suggestion: ModelKey | null
       /** The effort the person last set outside the mod (the app's control, their /effort): what the app shows. */
       appEffort: string | null
       /** The model the session runs now, as the engine last reported it (start, a switch, a request). */

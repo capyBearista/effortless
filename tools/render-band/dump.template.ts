@@ -49,7 +49,7 @@ describe('render rig', () => {
     }) as never)
     on('store.delete', ((_$: unknown, e: { key: string }) => (kept.delete(e.key), { value: undefined })) as never)
     on('store.keys', (() => ({ value: [...kept.keys()] })) as never)
-    mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+    mock.env(on, {})
     on('prompt.submit', (_$, e) => ({ text: e.text }))
     on('ui.status', () => ({ value: undefined }))
     on('session.messages', () => ({ value: [] }) as never)
