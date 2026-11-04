@@ -33,7 +33,7 @@ function handoffEngine(on: On, model = 'claude-opus-5-5', judged = 'low') {
     forked.push(e.prompt)
     return { value: { isAnswered: true, text: 'Goal: quick.', usage: USAGE } } as never
   })
-  on('model.complete', () => ({ value: { isAnswered: true as const, text: `{"model":"opus","effort":"${judged}","why":"x"}`, usage: USAGE } }))
+  on('model.complete', () => ({ value: { isAnswered: true as const, text: `{"haiku":"${judged}","sonnet":"${judged}","opus":"${judged}","why":"x"}`, usage: USAGE } }))
   const ran: { command: string; args: string }[] = []
   on('command.run', (_$, e) => {
     ran.push({ command: e.command, args: e.args })

@@ -16,6 +16,13 @@ export type Spent = {
   helpers: { runs: Partial<Record<Effort, number>>; requests: number; cost: number }
 }
 
+/** The models the judge gives an effort for. */
+export type JudgedModel = 'haiku' | 'sonnet' | 'opus'
+/** A judge's effort for one model, and how sure it was (0-1) when it said. */
+export type ModelAnswer = { effort: Effort; sure?: number }
+/** A judge's answers, per model, as it gave them: before the person's settings. */
+export type Answers = Partial<Record<JudgedModel, ModelAnswer>>
+
 /** What the next turn runs with, and who decided it. */
 export type Pick = {
   model: ModelKey
@@ -28,8 +35,8 @@ export type Pick = {
   judgeName?: string
   /** How sure the judge was of the effort, 0-1, when it said. */
   sure?: number
-  /** Haiku only: why a handoff would suit now (a few words), when it said it would. */
-  handoff?: string
+  /** jev and haiku: the judge's answers for every model, so a switch to another model takes that model's own. */
+  judged?: Answers
 }
 
 /** What follows a handoff: clear and carry on, clear and wait, or keep the chat and copy it. */

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelForkResult, Register, RenderInput } from 'claude-code'
 
-import type { AgentRec, Effort, HandoffAfter, HandoffChoice, ModelKey, Pick, SettingsDraft, Spent } from '../types'
+import type { AgentRec, Answers, Effort, HandoffAfter, HandoffChoice, JudgedModel, ModelAnswer, ModelKey, Pick, SettingsDraft, Spent } from '../types'
 import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolLine, touchOf, withTouch, withWaits } from './agents'
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
@@ -339,32 +339,74 @@ const DONE_EDGE = '#2f7a4c'
 // The mark in the done green, for the titles of cards that have landed.
 const DONE_MARK_SVG = MARK_SVG.replace(/#7566d8/g, '#2f9a5e').replace(/#a79cf7/g, '#7fe0a4').replace(/#cfc7ff/g, '#c8f4d8')
 
-const JUDGE_SYSTEM = `You choose which Claude model and reasoning effort an agentic assistant (it reads files, runs tools and edits things, not only code) should use for the user's next message. Pick the cheapest pair that will still do the job well.
+// The models the judge answers for, each on its own scale. Fable is not asked: Auto pauses there.
+const JUDGED: readonly JudgedModel[] = ['haiku', 'sonnet', 'opus']
+/**
+ * What each effort level is for, per model. Effort levels mean a different amount of thinking on each model (Anthropic:
+ * "effort names don't mean the same amount of thinking across models"; Opus 5.5 defaults to medium, Fable 5.1 is
+ * recommended at high), so no fixed step between models holds: a trivial task is low everywhere, a migration is max on
+ * Haiku but high on Opus. shortcut: drafted from Anthropic's per-model starting points and the maintainer's examples, not
+ * measured; the external decisionbench project is where to measure it.
+ */
+const MODEL_LEVELS: Record<JudgedModel, { about: string; levels: Record<Effort, string> }> = {
+  haiku: {
+    about: 'Claude Haiku 5.5, the fastest and cheapest: fine for small, well-defined work, strained by hard multi-step work',
+    levels: {
+      low: 'chat, quick answers, short one-step tool tasks',
+      medium: 'ordinary work: a few tool calls or edits, normal coding',
+      high: 'longer multi-step tasks, multi-file changes, strict instructions',
+      xhigh: 'hard debugging, large refactors',
+      max: 'the hardest jobs it can try: migrations, architecture, long investigations',
+    },
+  },
+  sonnet: {
+    about: 'Claude Sonnet 5.5, strong at everyday coding and agent work',
+    levels: {
+      low: 'chat, writing, extraction, search; no planning',
+      medium: 'ordinary coding and multi-step tool work',
+      high: 'hard debugging, large refactors, careful reviews',
+      xhigh: 'very hard: long investigations, big migrations',
+      max: 'research-level work where a miss is very costly',
+    },
+  },
+  opus: {
+    about: 'Claude Opus 5.5, the strongest of the three: hard debugging and architecture need less effort from it',
+    levels: {
+      low: 'quick answers, small edits',
+      medium: 'most coding and debugging, multi-step work',
+      high: 'hard debugging, architecture, large refactors, migrations',
+      xhigh: 'very hard, long-horizon investigations',
+      max: 'the hardest research-level work',
+    },
+  },
+}
 
-Models, cheapest first:
-- haiku: quick questions, lookups, renames, small edits in one or two files, summaries, chit-chat. It can read files and run tools; pick it for any small, well-defined job.
-- sonnet: normal coding, edits across a few files, explanations, writing.
-- opus: hard debugging, architecture, large refactors, careful reviews.
-- fable: the hardest long-horizon or research-level work.
-
-Effort: low for quick answers, medium for normal work, high for hard problems, xhigh or max only for very hard ones.
-
-Effort is relative to the model in use ("Current" names it): a stronger model needs less effort for the same job. Opus at medium does about what Sonnet does at high, and Fable is stronger again. So for one and the same task pick one step lower on Opus than on Sonnet, and lower still on Fable; on Sonnet, go one step higher for hard work than you would on Opus.
-
-Judge the SCOPE and the amount of work, not whether it is code. A short message can ask for a lot: "go through my whole drive and clean it up", "review the entire repo", "migrate everything" are big, multi-step, tool-heavy jobs where mistakes are costly: never low, usually high. Low is only for answers that need no tools and no planning.
+// How to judge, for Haiku and the decision models alike. It never names the effort in force: the judge rates the
+// task; keeping an effort (a "go" between steps, a message typed while a task runs) is effortless's own decision.
+const EFFORT_RULES = `Judge the scope and the amount of work, not whether it is code. A short message can ask for a lot: "go through my whole drive and clean it up", "review the entire repo", "migrate everything" are big, multi-step, tool-heavy jobs where mistakes are costly. Low is only for answers that need no tools and no planning.
 
 If the message answers a question in the assistant's last reply (picks an option, says which one, confirms a plan), judge only the work that answer starts, as the reply describes it, not the length of the answer and not the work done before the question: "B" can mean "build the complicated section B" (high), while "yes" or "no" to one small action ("should I archive this?", "delete the old ones too?") is low, and picking a value for one setting (a log level, a colour, a font) is low. But picking which way to build something ("option 1", "the same shapes", "B") starts that build: judge the build. Approving a whole plan or several steps takes the effort of that plan. A plain "yes", "ok" or "do it" after "Is that OK? Then I'll build X" or "Should I build X?" approves building X: judge X, not the word.
 
-A message that pushes back on, corrects or adds to a plan or claim under discussion continues that work: keep at least the effort that work had, never drop to low for it. Thanks, praise or a closing remark with no new request is low. A question about how to do something, or about effort itself, that needs no tools is low.
+A message that pushes back on, corrects or adds to a plan or claim under discussion continues that work: judge the effort that work needs, never low. Thanks, praise or a closing remark with no new request is low. A question about how to do something, or about effort itself, that needs no tools is low.
 
 If the person asks for deep thought ("think hard", "ultrathink", "be thorough"), pick at least high; if they ask for a quick answer, pick low.
 
-If the message is a short follow-up to ongoing work ("yes", "go", "ok", "continue", or the same in any language), keep the current pair.
+Effort levels mean a different amount of thinking on each model, so answer for each model on its own scale: the same task can need different levels on different models.`
 
-Reply with JSON only: {"model":"haiku|sonnet|opus|fable","effort":"low|medium|high|xhigh|max","sure":0.0-1.0 how sure you are of the effort,"why":"at most 6 words, in the user's language"}`
+const JUDGE_SYSTEM = `You choose the reasoning effort an agentic assistant (it reads files, runs tools and edits things, not only code) should use for the user's next message: the cheapest effort that will still do the job well, once for each of three Claude models.
 
-/** Reads `{ model, effort, why }` out of a reply, or nothing when it doesn't hold one. */
-export function parseVerdict(text: string): { model: ModelKey; effort: Effort; why: string; sure?: number; handoff?: string } | undefined {
+${JUDGED.map(m => `${m}: ${MODEL_LEVELS[m].about}.\n${EFFORTS.map(e => `- ${e}: ${MODEL_LEVELS[m].levels[e]}`).join('\n')}`).join('\n\n')}
+
+${EFFORT_RULES}
+
+Reply with JSON only: {"haiku":"low|medium|high|xhigh|max","sonnet":"low|medium|high|xhigh|max","opus":"low|medium|high|xhigh|max","sure":0.0-1.0 how sure you are,"why":"at most 6 words, in the user's language"}`
+
+/** A judge's answer: its effort for each model it answered for, and who said it. */
+type Verdict = { efforts: Answers; why: string; by: 'jev' | 'haiku'; judgeName?: string }
+
+/** Haiku's reply as a verdict: an effort per model, one sure and why. A model with no valid level is left out; nothing
+ * when no model has one. */
+export function parseVerdict(text: string): Verdict | undefined {
   const match = text.match(/\{[\s\S]*\}/)
   if (!match) return undefined
   let raw: unknown
@@ -374,14 +416,14 @@ export function parseVerdict(text: string): { model: ModelKey; effort: Effort; w
     return undefined
   }
   if (typeof raw !== 'object' || raw === null) return undefined
-  const { model, effort, why, sure, handoff } = raw as Record<string, unknown>
-  const key = typeof model === 'string' ? model.toLowerCase() : ''
-  const found = MODELS.find(m => key === m.key || key === m.id || key.includes(m.key))
-  if (!found || !EFFORTS.includes(effort as Effort)) return undefined
-  const how = typeof sure === 'number' && sure >= 0 && sure <= 1 ? { sure } : {}
-  // Only a reason counts: "handoff":"" or false is no advice.
-  const advice = typeof handoff === 'string' && handoff.trim() ? { handoff: handoff.trim().slice(0, 70) } : {}
-  return { model: found.key, effort: effort as Effort, why: typeof why === 'string' ? why.slice(0, 60) : '', ...how, ...advice }
+  const o = raw as Record<string, unknown>
+  const sure = typeof o.sure === 'number' && o.sure >= 0 && o.sure <= 1 ? o.sure : undefined
+  const efforts: Answers = {}
+  for (const m of JUDGED) {
+    if (EFFORTS.includes(o[m] as Effort)) efforts[m] = sure === undefined ? { effort: o[m] as Effort } : { effort: o[m] as Effort, sure }
+  }
+  if (!Object.keys(efforts).length) return undefined
+  return { efforts, why: typeof o.why === 'string' ? o.why.slice(0, 60) : '', by: 'haiku' }
 }
 
 /**
@@ -395,7 +437,8 @@ async function recentContext($: EngineInterface): Promise<string> {
 
 /** The context text from the conversation so far: the last user message, short, and the assistant's last reply's end. */
 export function contextFrom(messages: readonly { role: string; text: string }[]): string {
-  const lastUser = [...messages].reverse().find(m => m.role === 'user')
+  // A turn with no text of its own (a tool result, an image) says nothing: the person's last words are what count.
+  const lastUser = [...messages].reverse().find(m => m.role === 'user' && m.text.trim())
   const lastAssistant = lastAssistantText(messages)
   return [lastUser ? `user: ${lastUser.text.slice(0, 400)}` : '', lastAssistant ? `assistant: ${lastAssistant.slice(-2000)}` : '']
     .filter(Boolean)
@@ -408,32 +451,13 @@ function lastAssistantText(messages: readonly { role: string; text: string }[]):
 }
 
 
-// Jev answers typed questions with probabilities; these are the options it picks between.
-const JEV_EFFORTS: Record<Effort, string> = {
-  low: 'quick answer, no tools, no planning',
-  medium: 'normal work: a few tool calls or edits',
-  high: 'hard or large multi-step job: many tool calls, costly mistakes',
-  xhigh: 'very hard: a long investigation',
-  max: 'the hardest research-level work',
-}
-const JEV_MODELS: Record<ModelKey, string> = {
-  haiku: 'trivial questions, lookups, renames, chit-chat',
-  sonnet: 'normal coding, edits across a few files, explanations, writing',
-  opus: 'hard debugging, architecture, large refactors, careful reviews',
-  fable: 'the hardest long-horizon or research-level work',
-}
-const JEV_TASK =
-  'Choose the reasoning effort (and model) an agentic assistant should use for the next user message. It reads files, ' +
-  'runs tools and edits things, not only code. Pick the cheapest that still does the job well. Judge the scope and the ' +
-  'amount of work, not whether it is code: "go through my whole drive and clean it up" is a big tool-heavy job. ' +
-  'Effort is relative to current_model: a stronger model needs less for the same job. Opus at medium does about what ' +
-  'Sonnet does at high, so for one task pick one step lower on Opus than on Sonnet. ' +
-  'A short follow-up ("yes", "go", "ok", in any language) keeps the current effort. When the message answers a ' +
-  "question in the assistant's last reply (picks an option), judge only the work that answer starts, not its length and " +
-  'not the work before the question: yes/no to one small action, or picking a value for one setting (a log level, a colour), is low; picking which way to build something starts that build, so judge the build; ' +
-  'approving a whole plan takes the effort of that plan; a plain yes to "Then I will build X" means judge X. Pushing back on or adding to a plan under discussion continues that work: keep its effort, never low. Thanks or a closing remark with no new request is low. A ' +
-  'question about how to do something that needs no tools is low. "think hard", "ultrathink" or "be thorough" means ' +
-  'at least high; "quick question" means low.'
+// The decision models' task: the same rules as Haiku's, one typed question per model.
+const JEV_TASK = `Choose the reasoning effort an agentic assistant should use for the next user message, once for each model asked. It reads files, runs tools and edits things, not only code. Pick the cheapest effort that still does the job well.
+
+${EFFORT_RULES}`
+const JEV_QUESTIONS = Object.fromEntries(
+  JUDGED.map(m => [`effort_${m}`, { type: 'choice', instructions: `Which effort should ${MODEL_LEVELS[m].about} use for the next message?`, criteria: MODEL_LEVELS[m].levels }]),
+)
 
 /** The skill or custom command a typed "/name args" runs, or nothing for the app's own commands and effortless's. */
 async function typedSkill($: EngineInterface, text: string): Promise<{ name: string; description: string } | undefined> {
@@ -489,11 +513,12 @@ export function withAttachments(text: string, attachments?: readonly { type: str
 [The message comes with ${said} to look at.]`
 }
 
-/** The message as the judge reads it when it was typed while a task was still running. */
-export function withMidTurn(text: string, effort: Effort): string {
+/** The message as the judge reads it when it was typed while a task was still running. The effort that task runs at
+ * stays out: a lower verdict waits for the turn to end (heldPick), so the running task is safe either way. */
+export function withMidTurn(text: string): string {
   return `${text}
 
-[Sent while the assistant was still working on the last task at ${effort} effort. If it adds to, corrects or steers that task, keep ${effort}; judge it on its own only if it is a separate new request.]`
+[Sent while the assistant was still working on the last task. If it adds to, corrects or steers that task, judge the effort that task needs; judge it on its own only if it is a separate new request.]`
 }
 // A lower verdict for a message typed mid-turn, applied when that turn ends (see prompt.submit).
 let heldPick: Pick | null = null
@@ -514,28 +539,46 @@ export function parseEnvLine(text: string, name: string): string | undefined {
   return value || undefined
 }
 
-/**
- * Jev's answer as a verdict. Below even odds on the effort it is unsure, and an unsure call keeps the
- * current effort: that is what a "go" between two steps of work should do.
- */
+// The band's words when effortless kept the effort because the judge was unsure.
 const UNSURE = 'unsure, keeping'
-export function parseJevAnswer(text: string, current: Pick | null): { model: ModelKey; effort: Effort; why: string; sure?: number } | undefined {
-  let json: Record<string, unknown>
+/** A decision model below even odds on this model's effort. Haiku's own sure (self-reported) only tips the slider. */
+export const isUnsure = (by: Verdict['by'] | Pick['by'], answer: ModelAnswer | undefined) => by === 'jev' && (answer?.sure ?? 1) < 0.5
+
+/**
+ * A decision model's reply as a verdict: each model's choice and how sure it was (its confidence, else the choice's
+ * probability), as given. The answers may sit under `answers`, `result.answers` or at the top level. A model with no
+ * valid level is left out; nothing when no model has one. Whether an answer is sure enough is the caller's call.
+ */
+export function parseJevAnswer(text: string): Verdict | undefined {
+  let json: unknown
   try {
     json = JSON.parse(text)
   } catch {
     return undefined
   }
-  const answers = (json.answers ?? (json.result as Record<string, unknown> | undefined)?.answers) as
-    | Record<string, { choice?: string; confidence?: number; probabilities?: Record<string, number> }>
-    | undefined
-  const effort = answers?.effort?.choice as Effort | undefined
-  if (!effort || !EFFORTS.includes(effort)) return undefined
-  const model = MODELS.find(m => m.key === answers?.model?.choice)?.key ?? current?.model ?? 'sonnet'
-  const sure = answers?.effort?.confidence ?? answers?.effort?.probabilities?.[effort]
-  if (current && typeof sure === 'number' && sure < 0.5) return { model, effort: current.effort, why: UNSURE, sure }
-  if (typeof sure !== 'number') return { model, effort, why: '' }
-  return { model, effort, why: `${Math.round(sure * 100)}% sure`, sure }
+  if (typeof json !== 'object' || json === null) return undefined
+  const o = json as Record<string, any>
+  const answers = (o.answers ?? o.result?.answers ?? o) as Record<string, { choice?: string; confidence?: number; probabilities?: Record<string, number> } | undefined>
+  const efforts: Answers = {}
+  for (const m of JUDGED) {
+    const a = answers[`effort_${m}`]
+    const effort = a?.choice as Effort | undefined
+    if (!effort || !EFFORTS.includes(effort)) continue
+    const sure = a?.confidence ?? a?.probabilities?.[effort]
+    efforts[m] = typeof sure === 'number' ? { effort, sure } : { effort }
+  }
+  return Object.keys(efforts).length ? { efforts, why: '', by: 'jev' } : undefined
+}
+
+/** A verdict's answers in a line: "haiku max · sonnet high · opus medium 40% (unsure)", for debug and the panel's Test. */
+export function answersText(v: Verdict): string {
+  return JUDGED.filter(m => v.efforts[m])
+    .map(m => {
+      const a = v.efforts[m]!
+      const sure = a.sure !== undefined && v.by === 'jev' ? ` ${Math.round(a.sure * 100)}%` : ''
+      return `${m} ${a.effort}${sure}${isUnsure(v.by, a) ? ' (unsure)' : ''}`
+    })
+    .join(' · ')
 }
 
 let askJevFile: EnvAsk | undefined
@@ -561,7 +604,7 @@ async function jevKey($: EngineInterface): Promise<string | undefined> {
   return askJevFile
 }
 
-type Judged = { verdict?: Pick; tokens: number }
+type Judged = { verdict?: Verdict; tokens: number }
 
 /** Why a judge the person picked could not answer, in words: what a status code means for them. */
 export function judgeFailure(name: string, status: number | 'timeout'): string {
@@ -710,47 +753,42 @@ export function readConfig(options: unknown): JudgeConfig {
   }
 }
 
-/** The text the judge reads: the current pair, the last turns and the next message. */
-function judgeQuestion(prompt: string, current: Pick | null, context: string): string {
-  return [
-    current ? `Current: ${current.model} / ${current.effort}` : 'Current: none',
-    context ? `Recent conversation:\n${context}` : '',
-    `Next message:\n${prompt.slice(0, 2000)}`,
-  ]
-    .filter(Boolean)
-    .join('\n\n')
+/** The text Haiku reads: the last turns and the next message. Not the model in use nor the effort in force: the verdict
+ * answers for every model, and effortless applies the one that runs. */
+function judgeQuestion(prompt: string, context: string): string {
+  return [context ? `Recent conversation:\n${context}` : '', `Next message:\n${prompt.slice(0, 2000)}`].filter(Boolean).join('\n\n')
 }
 
 /**
- * Haiku always judges; Jev is the optional quick one. Jev is asked first when a TypeSafe key is found (unless the
- * setting is haiku), and Haiku makes the call whenever Jev is unsure, down or slow. Any judge that fails or takes longer than JEV_TIMEOUT_MS falls back to
- * Haiku, which needs nothing but the session's own login. Never throws.
+ * Haiku always judges; decision models (or Jev on TypeSafe) are the optional quick ones, asked first unless the setting
+ * is haiku. Haiku makes the call when they fail, are slow, or are unsure of (or silent on) the effort for `target`, the
+ * model the answer is for. With no target (a helper, whose model is not known yet) the answer is taken as it is and
+ * each request checks its own model's entry. Never throws.
  */
-async function judge($: EngineInterface, prompt: string, current: Pick | null): Promise<Judged> {
+async function judge($: EngineInterface, prompt: string, target: JudgedModel | null): Promise<Judged> {
   const context = await recentContext($).catch(() => '')
+  let first: Judged | undefined
   // Fork: with decision models set, they replace the TypeSafe-only Jev; Haiku still has the last word.
-  if (config.judge !== 'haiku' && config.decisionModels.length) {
-    const jev = (await askChain($, prompt, current, context))?.judged
-    if (jev) return jev.verdict?.why === UNSURE ? haikuAfter($, jev, prompt, current, context) : jev
-    return askHaiku($, prompt, current, context)
+  if (config.judge !== 'haiku' && config.decisionModels.length) first = (await askChain($, prompt, context))?.judged
+  else {
+    const key = config.judge !== 'haiku' ? await jevKey($).catch(() => undefined) : undefined
+    if (key) first = await askJev($, key, prompt, context)
   }
-  const key = config.judge !== 'haiku' ? await jevKey($).catch(() => undefined) : undefined
-  if (key) {
-    const jev = await askJev($, key, prompt, current, context)
-    if (jev) return jev.verdict?.why === UNSURE ? haikuAfter($, jev, prompt, current, context) : jev
-  }
-  return askHaiku($, prompt, current, context)
+  if (!first?.verdict) return askHaiku($, prompt, context)
+  if (target && (!first.verdict.efforts[target] || isUnsure(first.verdict.by, first.verdict.efforts[target]))) return haikuAfter($, first, prompt, context)
+  return first
 }
 
-/** Jev was unsure: Haiku makes the call, and both judges' tokens count. */
-async function haikuAfter($: EngineInterface, jev: Judged, prompt: string, current: Pick | null, context: string): Promise<Judged> {
-  const haiku = await askHaiku($, prompt, current, context)
-  return haiku.verdict ? { verdict: haiku.verdict, tokens: haiku.tokens + jev.tokens } : jev
+/** A decision model was unsure: Haiku makes the call, and both judges' tokens count. Without Haiku's answer the unsure
+ * one is returned as it is, for the caller to keep the effort in force. */
+async function haikuAfter($: EngineInterface, jev: Judged, prompt: string, context: string): Promise<Judged> {
+  const haiku = await askHaiku($, prompt, context)
+  return { verdict: haiku.verdict ?? jev.verdict, tokens: haiku.tokens + jev.tokens }
 }
 
 /** Jev on TypeSafe: an answer, or nothing when it fails, is unsure of its own format or takes too long. */
-async function askJev($: EngineInterface, key: string, prompt: string, current: Pick | null, context: string): Promise<Judged | undefined> {
-  const asked = await askDecision($, { name: 'Jev', url: (await envJevUrl($)) ?? JEV_URL, model: 'jev-latest', key, timeoutMs: JEV_TIMEOUT_MS }, prompt, current, context)
+async function askJev($: EngineInterface, key: string, prompt: string, context: string): Promise<Judged | undefined> {
+  const asked = await askDecision($, { name: 'Jev', url: (await envJevUrl($)) ?? JEV_URL, model: 'jev-latest', key, timeoutMs: JEV_TIMEOUT_MS }, prompt, context)
   if ('judged' in asked) return asked.judged
   if (!asked.quiet) warnJudge($, asked.reason)
   return undefined
@@ -792,16 +830,17 @@ async function hasOpenRouterKey($: EngineInterface): Promise<boolean> {
 
 // The decision model that answered the last prompt, and how fast: for /effortless debug.
 let lastChainAnswer = ''
+// The last verdict as the judge gave it, before effortless's settings, and what was applied: for /effortless debug.
+let lastVerdictLine = ''
 
 /**
  * Fork: the decision models in the order set, each until one answers. A failed one passes to the next; a model with
- * no key is skipped without a request. An unsure answer still ends the chain (Haiku decides, as with Jev). The person
+ * no key is skipped without a request. An unsure answer still ends the chain (Haiku may decide, as with Jev). The person
  * hears only when none answered, once, with the last reason. Never throws.
  */
 async function askChain(
   $: EngineInterface,
   prompt: string,
-  current: Pick | null,
   context: string,
   // The panel's Test passes its draft: the models and an OpenRouter key not saved yet.
   routes: readonly DecisionRoute[] = config.decisionModels,
@@ -827,7 +866,7 @@ async function askChain(
     }
     const url = route.provider === 'zen' ? ZEN_URL : route.provider === 'openrouter' ? OPENROUTER_URL : ((await envJevUrl($)) ?? JEV_URL)
     const askedAt = await $.clock.now()
-    const asked = await askDecision($, { name, url, model: route.model, key, timeoutMs, label: routeShortName(route) }, prompt, current, context)
+    const asked = await askDecision($, { name, url, model: route.model, key, timeoutMs, label: routeShortName(route) }, prompt, context)
     if ('judged' in asked) {
       const took = (((await $.clock.now()) - askedAt) / 1000).toFixed(1)
       lastChainAnswer = `${routeLabel(route)} ${took} s`
@@ -849,7 +888,6 @@ async function askDecision(
   $: EngineInterface,
   ask: { name: string; url: string; model: string; key?: string; timeoutMs: number; label?: string },
   prompt: string,
-  current: Pick | null,
   context: string,
 ): Promise<{ judged: Judged } | { reason: string; quiet?: true }> {
   try {
@@ -864,17 +902,9 @@ async function askDecision(
         headers,
         body: JSON.stringify({
           model: ask.model,
-          state: {
-            task: JEV_TASK,
-            current_model: current?.model ?? null,
-            current_effort: current?.effort ?? null,
-            recent_conversation: context,
-            next_message: prompt.slice(0, 4000),
-          },
-          questions: {
-            effort: { type: 'choice', instructions: 'Which effort fits the next message?', criteria: JEV_EFFORTS },
-            model: { type: 'choice', instructions: 'Which model fits the next message?', criteria: JEV_MODELS },
-          },
+          // Neither the model in use nor the effort in force: the same message gets the same question.
+          state: { task: JEV_TASK, recent_conversation: context, next_message: prompt.slice(0, 4000) },
+          questions: JEV_QUESTIONS,
         }),
       }),
       $.clock.sleep(ask.timeoutMs).then(() => {
@@ -882,7 +912,7 @@ async function askDecision(
       }),
     ])
     if (!res.ok) return { reason: judgeFailure(ask.name, res.status) }
-    const verdict = parseJevAnswer(res.text, current)
+    const verdict = parseJevAnswer(res.text)
     if (verdict) {
       let used = 0
       try {
@@ -892,7 +922,7 @@ async function askDecision(
         // No usage in the reply: counted as 0.
       }
       if (await read($, judgeDown)) await update($, judgeDown, () => null)
-      return { judged: { verdict: { ...verdict, by: 'jev', ...(ask.label ? { judgeName: ask.label } : {}) }, tokens: used } }
+      return { judged: { verdict: { ...verdict, ...(ask.label ? { judgeName: ask.label } : {}) }, tokens: used } }
     }
     return { reason: `${ask.name} gave no usable answer`, quiet: true }
   } catch (error) {
@@ -911,14 +941,13 @@ const JUDGE_TEST_PROMPT = 'rename one variable in a single file'
 async function testJudge($: EngineInterface, judgeKind: string, draftKey: string, draftChain = chainIds(config.decisionModels), draftOrKey = ''): Promise<{ ok: boolean; text: string }> {
   const start = await $.clock.now()
   const took = async () => `${(((await $.clock.now()) - start) / 1000).toFixed(1)} s`
-  const said = (name: string, j: Judged | undefined) =>
-    j?.verdict?.why === UNSURE ? `${name} answered, unsure on the sample` : `${name} answered: ${j?.verdict?.effort}`
+  const said = (name: string, j: Judged | undefined) => `${name} answered: ${j?.verdict ? answersText(j.verdict) : 'nothing'}`
   judgeTesting = {}
   try {
     // Fork: with decision models set, the test walks them as a prompt would and names the one that answered.
     const routes = parseDecisionModels(draftChain)
     if (judgeKind !== 'haiku' && routes.length) {
-      const chained = await askChain($, JUDGE_TEST_PROMPT, null, '', routes, draftOrKey)
+      const chained = await askChain($, JUDGE_TEST_PROMPT, '', routes, draftOrKey)
       const before = chained?.misses.length ? ` · ${chained.misses.join(' · ')}` : ''
       if (chained) return { ok: true, text: `${said(chained.name, chained.judged)} in ${await took()}${before}` }
       return { ok: false, text: judgeTesting.reason ?? 'No decision model gave a usable answer' }
@@ -927,12 +956,12 @@ async function testJudge($: EngineInterface, judgeKind: string, draftKey: string
       const key = parseJevKey(draftKey) ?? (draftKey.trim() || undefined) ?? (await jevKey($).catch(() => undefined)) ?? (await typesafeKeyAnywhere($).catch(() => undefined))
       if (!key && judgeKind === 'jev') return { ok: false, text: 'No TypeSafe key found' }
       if (key) {
-        const j = await askJev($, key, JUDGE_TEST_PROMPT, null, '')
+        const j = await askJev($, key, JUDGE_TEST_PROMPT, '')
         if (j?.verdict) return { ok: true, text: `${said('Jev', j)} in ${await took()}` }
         return { ok: false, text: judgeTesting.reason ?? 'Jev gave no usable answer' }
       }
     }
-    const h = await askHaiku($, JUDGE_TEST_PROMPT, null, '')
+    const h = await askHaiku($, JUDGE_TEST_PROMPT, '')
     return h.verdict ? { ok: true, text: `${said('Haiku', h)} in ${await took()}` } : { ok: false, text: 'Haiku gave no answer' }
   } catch (error) {
     return { ok: false, text: String(error).slice(0, 80) }
@@ -942,9 +971,9 @@ async function testJudge($: EngineInterface, judgeKind: string, draftKey: string
 }
 
 /** Haiku through the session's own login: the judge that needs no key, and the fallback for the others. */
-async function askHaiku($: EngineInterface, prompt: string, current: Pick | null, context: string): Promise<Judged> {
+async function askHaiku($: EngineInterface, prompt: string, context: string): Promise<Judged> {
   const used = lastContext && lastContext.window ? `Context used: ${Math.round(lastContext.percent)}% of the window` : ''
-  const asked = [judgeQuestion(prompt, current, context), used].filter(Boolean).join('\n\n')
+  const asked = [judgeQuestion(prompt, context), used].filter(Boolean).join('\n\n')
   const ask = (model: string) => $.model.complete({ model, system: JUDGE_SYSTEM, prompt: asked, maxTokens: 160, effort: 'low', timeoutMs: 6000 })
   // Haiku 5.5 by name: Claude Code builds that predate it map the plain alias to Haiku 4.5, at ten times the price.
   // Where 5.5 does not answer, the alias stands in.
@@ -952,7 +981,7 @@ async function askHaiku($: EngineInterface, prompt: string, current: Pick | null
   if (!r.isAnswered) r = await ask('haiku')
   const verdict = r.isAnswered ? parseVerdict(r.text) : undefined
   const tokens = r.isAnswered && r.usage ? r.usage.input_tokens + r.usage.output_tokens : 0
-  return { verdict: verdict && { ...verdict, by: 'haiku' }, tokens }
+  return { verdict, tokens }
 }
 
 // Whether a fresh chat would now serve better than carrying on: Haiku's call, whatever judge picks the effort. It runs
@@ -1041,7 +1070,20 @@ async function modelIs($: EngineInterface, id: string) {
   // The engine's effort can differ per model, so a change across a switch is not the person's doing.
   engineEffort = undefined
   const current = await read($, pick)
-  if (current && current.model !== key) await choose($, { ...current, model: key })
+  if (current && current.model !== key) {
+    // A judged pick takes the new model's own answer, through the person's settings; a level they set or named stays.
+    const answer = key !== 'fable' ? current.judged?.[key] : undefined
+    const own = answer && !isUnsure(current.by, answer) ? { ...(await settledPick($, answer, current.why)), sure: answer.sure } : {}
+    await choose($, { ...current, model: key, ...own })
+  }
+}
+
+/** A judge's answer for the chat's model within the person's slider, Min and Max and save mode, and the band's why. */
+async function settledPick($: EngineInterface, answer: ModelAnswer, why: string): Promise<{ effort: Effort; why: string }> {
+  const saving = (await read($, saveUntil)) !== null
+  const leaned = bounded(tipped(answer.effort, answer.sure, config.bias), config.floor, config.ceiling)
+  const effort = capped(leaned, saving)
+  return { effort, why: effort !== leaned ? 'save mode' : leaned !== answer.effort ? 'your settings' : why }
 }
 
 async function sessionModel($: EngineInterface): Promise<ModelKey> {
@@ -3343,11 +3385,12 @@ async function agentCost($: EngineInterface, id: string, cost: number) {
   await agentSet($, id, a => ({ ...a, cost: (a.cost ?? 0) + cost }))
 }
 
-// Effort for helpers: the effort the judge picked for each subagent, by its id. A subagent's first request can come
-// before its spawn resolves with the id (seen 2026-10-10), so a pick waits under the spawn's description and type
-// until a request from an unknown subagent claims it through $.agent.list().
-const helperPicks = new Map<string, Effort>()
-let helperWaiting: { description: string; type: string; parentId?: string; effort: Effort }[] = []
+// Effort for helpers: the judge's verdict for each subagent's task, by its id; each request takes the answer for the
+// model it runs on. A subagent's first request can come before its spawn resolves with the id (seen 2026-10-10), so a
+// verdict waits under the spawn's description and type until a request from an unknown subagent claims it through
+// $.agent.list().
+const helperPicks = new Map<string, Verdict>()
+let helperWaiting: { description: string; type: string; parentId?: string; verdict: Verdict }[] = []
 
 /** What the judge reads for a subagent: its task, said to be one, so it judges the subagent's work. */
 export function helperQuestion(prompt: string, type: string): string {
@@ -3363,18 +3406,25 @@ export function helperFloor(floor: Effort, ceiling: Effort): Effort {
   return EFFORTS[i]
 }
 
-/** The judge's effort for a subagent's task, within the person's slider, Min and Max and save mode; null without a verdict. */
-async function helperEffort($: EngineInterface, prompt: string, type: string): Promise<Pick | null> {
-  const { verdict } = await judge($, helperQuestion(prompt, type), null)
-  if (!verdict || verdict.why === UNSURE) return null
-  const saving = (await read($, saveUntil)) !== null
-  const leaned = tipped(verdict.effort, verdict.sure, config.bias)
-  const effort = capped(bounded(leaned, helperFloor(config.floor, config.ceiling), config.ceiling), saving)
-  return { ...verdict, effort, why: effort !== leaned && EFFORTS.indexOf(leaned) < EFFORTS.indexOf(effort) ? `${verdict.why} (helpers start at medium)` : verdict.why }
+/** The judge's verdict on a subagent's task, or null. Its model is not known yet, so no answer is checked here. */
+async function helperEffort($: EngineInterface, prompt: string, type: string): Promise<Verdict | null> {
+  return (await judge($, helperQuestion(prompt, type), null)).verdict ?? null
 }
 
-/** The effort picked for this subagent, claiming a waiting pick the first time its id is seen. */
-async function helperEffortOf($: EngineInterface, id: string): Promise<Effort | undefined> {
+/** A helper's effort on the model it runs on, within the person's slider, Min and Max and save mode; null when the
+ * verdict has no sure answer for that model (the helper then runs as it would without one). */
+async function helperSettled($: EngineInterface, verdict: Verdict, modelId: string): Promise<{ effort: Effort; why: string } | null> {
+  const key = keyOf(modelId)
+  const answer = key && key !== 'fable' ? verdict.efforts[key] : undefined
+  if (!answer || isUnsure(verdict.by, answer)) return null
+  const saving = (await read($, saveUntil)) !== null
+  const leaned = tipped(answer.effort, answer.sure, config.bias)
+  const effort = capped(bounded(leaned, helperFloor(config.floor, config.ceiling), config.ceiling), saving)
+  return { effort, why: effort !== leaned && EFFORTS.indexOf(leaned) < EFFORTS.indexOf(effort) ? `${verdict.why} (helpers start at medium)` : verdict.why }
+}
+
+/** The verdict for this subagent, claiming a waiting one the first time its id is seen. */
+async function helperEffortOf($: EngineInterface, id: string): Promise<Verdict | undefined> {
   const known = helperPicks.get(id)
   if (known || helperWaiting.length === 0) return known
   const info = (await $.agent.list().catch(() => [])).find(a => a.id === id)
@@ -3382,8 +3432,8 @@ async function helperEffortOf($: EngineInterface, id: string): Promise<Effort | 
   const match = helperWaiting.find(w => w.description === info.description && w.type === info.type && w.parentId === info.parentId)
   if (!match) return undefined
   helperWaiting = helperWaiting.filter(w => w !== match)
-  helperPicks.set(id, match.effort)
-  return match.effort
+  helperPicks.set(id, match.verdict)
+  return match.verdict
 }
 
 /** Counts one request of a helper the judge steered, for /effortless stats. */
@@ -3693,6 +3743,7 @@ export const register: Register = (on, options) => {
           `app sent: ${lastRenderProps || 'nothing'}`,
           `settings open: ${await read($, settingsOpen)}`,
           `judge: ${config.judge} · models: ${config.decisionModels.length ? `${config.decisionModels.map(routeLabel).join(' → ')} → Haiku` : 'none'} · last answer: ${lastChainAnswer || 'none yet'}${timingWarnings(pluginOptions).map(w => ` · ${w}`).join('')}`,
+          `last verdict: ${lastVerdictLine || 'none yet'}`,
           `setup step: ${await read($, setupStep)}`,
           `handoff: ${await read($, handoffStage)}`,
           `last fork: ${lastFork ? `${lastFork.outcome}, ${ago(lastFork.at)}` : 'none'}`,
@@ -3750,12 +3801,12 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     // "go", "ok", "yes" between two steps of work keep the effort Auto already chose; no judge is asked.
     const before = await read($, pick)
     // A message with an image is never a bare follow-up: "fix this" plus a screenshot is new work.
-    // Typed while a turn ran (e.turnId), it often steers that task: the judge is told, so it can keep the effort.
+    // Typed while a turn ran (e.turnId), it often steers that task: the judge is told, and a lower verdict waits (heldPick).
     const midTurn = e.turnId !== undefined && before !== null
     const said = skill ? `${e.text}
 
 [This is a slash command that runs a skill: ${skill.description || skill.name}. Judge the work the skill will do.]` : e.text
-    const shown = midTurn ? withMidTurn(withAttachments(said, e.attachments), before.effort) : withAttachments(said, e.attachments)
+    const shown = midTurn ? withMidTurn(withAttachments(said, e.attachments)) : withAttachments(said, e.attachments)
     if (wantsEffort && before && before.by !== 'manual' && !e.attachments?.length && !slash && isFollowUp(e.text) && keepsEffort(e.text, await recentContext($).catch(() => ''))) {
       await countPrompt($, before.effort, undefined, 0, 0)
       void proof($, `follow-up "${e.text.trim()}": keeping ${before.effort}`)
@@ -3787,42 +3838,35 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     await update($, isJudging, () => true)
     try {
       const inUse = await sessionModel($)
+      // Fable never gets here (Auto pauses on it); the judge answers for the other three.
+      const target = inUse as JudgedModel
       const startedAt = Date.now()
-      const { verdict, tokens: judgeTokens } = await judge($, shown, {
-        model: inUse,
-        effort: (await read($, pick))?.effort ?? 'medium',
-        why: '',
-        by: 'manual',
-      })
+      const { verdict, tokens: judgeTokens } = await judge($, shown, target)
       await endJudgeGlow($, 'verdict')
       const ms = Date.now() - startedAt
-      await countPrompt($, wantsEffort && inUse !== 'haiku' ? verdict?.effort : undefined, verdict?.by, ms, judgeTokens)
-      void proof(
-        $,
-        verdict
-          ? `judged by ${verdict.by} in ${ms} ms: ${verdict.model}/${verdict.effort} (${verdict.why}) for "${e.text.slice(0, 50)}"`
-          : `no verdict after ${ms} ms for "${e.text.slice(0, 50)}"`,
-      )
+      const running = await read($, pick)
+      const answer = verdict?.efforts[target]
+      let applied: Pick | null = null
+      if (verdict && answer && !isUnsure(verdict.by, answer)) {
+        const why = verdict.why || (answer.sure !== undefined ? `${Math.round(answer.sure * 100)}% sure` : '')
+        applied = { model: inUse, ...(await settledPick($, answer, why)), by: verdict.by, ...(verdict.judgeName ? { judgeName: verdict.judgeName } : {}), ...(answer.sure !== undefined ? { sure: answer.sure } : {}), judged: verdict.efforts }
+      } else if (verdict) {
+        // Unsure even after Haiku's look (or no answer for this model): effortless keeps the effort in force.
+        applied = { model: inUse, effort: running?.effort ?? 'medium', why: UNSURE, by: verdict.by, ...(verdict.judgeName ? { judgeName: verdict.judgeName } : {}), judged: verdict.efforts }
+      }
+      lastVerdictLine = verdict ? `${verdict.judgeName ?? verdict.by}: ${answersText(verdict)} -> ${applied?.effort} on ${inUse} (${applied?.why})` : 'no verdict'
+      await countPrompt($, inUse !== 'haiku' ? applied?.effort : undefined, verdict?.by, ms, judgeTokens)
+      void proof($, `judged in ${ms} ms: ${lastVerdictLine} for "${e.text.slice(0, 50)}"`)
       $.ui.invalidate('ui.render')
-      if (verdict) {
-        // Effort follows the verdict at once, when Auto is on for effort. The model stays: switching it
-        // reloads the context, so with Auto on for model it is only suggested.
-        if (wantsEffort) {
-          const saving = (await read($, saveUntil)) !== null
-          const leaned = bounded(tipped(verdict.effort, verdict.sure, config.bias), config.floor, config.ceiling)
-          const effort = capped(leaned, saving)
-          const why = effort !== leaned ? 'save mode' : leaned !== verdict.effort ? 'your settings' : verdict.why
-          const applied: Pick = { ...verdict, model: inUse, effort, why }
-          // Mid-turn, a lower verdict would cut the running task's effort for its remaining steps: it waits for the
-          // turn to end (the queued message may run as a turn of its own). A higher one helps the task, so it applies.
-          const running = await read($, pick)
-          if (midTurn && running && EFFORTS.indexOf(effort) < EFFORTS.indexOf(running.effort)) {
-            heldPick = applied
-            void proof($, `typed mid-turn: ${effort} waits, the running turn keeps ${running.effort}`)
-          } else {
-            heldPick = null
-            await choose($, applied)
-          }
+      if (applied) {
+        // Mid-turn, a lower verdict would cut the running task's effort for its remaining steps: it waits for the
+        // turn to end (the queued message may run as a turn of its own). A higher one helps the task, so it applies.
+        if (midTurn && running && EFFORTS.indexOf(applied.effort) < EFFORTS.indexOf(running.effort)) {
+          heldPick = applied
+          void proof($, `typed mid-turn: ${applied.effort} waits, the running turn keeps ${running.effort}`)
+        } else {
+          heldPick = null
+          await choose($, applied)
         }
       }
     } finally {
@@ -3884,9 +3928,10 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       if (e.index === 0) void proof($, `full handoff: request ${e.index} (${e.model}) at ${handoffEffort}, was ${e.effort}`)
       return yield* send({ ...e, effort: handoffEffort })
     }
-    // A helper the judge picked an effort for at its spawn runs every request at it. Haiku takes no effort.
+    // A helper the judge read at its spawn runs every request at the answer for the model it runs on. Haiku takes no effort.
     if (e.agentId !== undefined && config.helpers === 'on' && typeof e.effort === 'string' && keyOf(e.model) !== 'haiku') {
-      const effort = await helperEffortOf($, e.agentId)
+      const verdict = await helperEffortOf($, e.agentId)
+      const effort = verdict ? (await helperSettled($, verdict, e.model))?.effort : undefined
       if (effort) {
         if (e.index === 0) void proof($, `helper ${e.agentId} request 0 (${e.model}): effort ${e.effort} -> ${effort}`)
         const result = yield* send({ ...e, effort })
@@ -3900,11 +3945,13 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     // Auto off: the app's own effort goes out. A pick the judge made while Auto was on is not the person's choice, and
     // with the app already on the effort they want, the mod would never see a change to give way to.
     if (p.by !== 'manual' && !(await read($, isAuto))) return yield* send(e)
-    // A subagent of a turn Auto picked for (Helpers off, or no verdict for it) runs at that turn's effort, no extra
-    // judge call, but never below medium: a helper's answer goes back unchecked (see helperFloor). A subagent whose
-    // definition sets its own effort cannot be told apart from one that inherits it, so it follows the turn too.
+    // A subagent of a turn Auto picked for (Helpers off, or no answer for it) runs as Claude Code runs it: on the chat's
+    // model at the chat's effort, here the turn's, no extra judge call, but never below medium: a helper's answer goes
+    // back unchecked (see helperFloor). On another model Claude Code's own effort stands (its definition's, or that
+    // model's default). A subagent whose definition sets its own effort cannot be told apart from one that inherits it,
+    // so on the chat's model it follows the turn too.
     if (e.agentId !== undefined) {
-      if (p.by === 'manual') return yield* send(e)
+      if (p.by === 'manual' || keyOf(e.model) !== p.model) return yield* send(e)
       const floor = helperFloor(config.floor, config.ceiling)
       const effort = EFFORTS.indexOf(p.effort) < EFFORTS.indexOf(floor) ? floor : p.effort
       if (e.index === 0) void proof($, `subagent ${e.agentId} (${e.model}): effort ${e.effort ?? 'none'} -> ${effort}, the turn's`)
@@ -4031,27 +4078,29 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     const helper = config.helpers === 'on' && !e.fork && !e.isTeammate && !e.workflow
       ? await helperEffort($, e.prompt, e.subagentType).catch(() => null)
       : null
-    const waiting = helper ? { description: e.description, type: e.subagentType, parentId: e.parentAgentId, effort: helper.effort } : null
+    const waiting = helper ? { description: e.description, type: e.subagentType, parentId: e.parentAgentId, verdict: helper } : null
     if (waiting) helperWaiting = [...helperWaiting, waiting].slice(-20)
     const result = await next(e)
+    // Now its model is known: the effort it runs at, for the pane and the stats.
+    const settled = helper && 'agentId' in result && result.agentId && result.model ? await helperSettled($, helper, result.model) : null
     if (waiting) {
       helperWaiting = helperWaiting.filter(w => w !== waiting)
-      if ('agentId' in result && result.agentId && !helperPicks.has(result.agentId)) helperPicks.set(result.agentId, waiting.effort)
-      if ('agentId' in result && result.agentId) {
+      if ('agentId' in result && result.agentId && !helperPicks.has(result.agentId)) helperPicks.set(result.agentId, waiting.verdict)
+      void proof($, `helper ${e.subagentType} "${e.description}": ${answersText(waiting.verdict)}${settled ? ` -> ${settled.effort} (${settled.why})` : ', none applies'}`)
+      if (settled) {
         await update($, saved, old => {
           const t = asSpent(old)
-          return { ...t, helpers: { ...t.helpers, runs: { ...t.helpers.runs, [waiting.effort]: (t.helpers.runs[waiting.effort] ?? 0) + 1 } } }
+          return { ...t, helpers: { ...t.helpers, runs: { ...t.helpers.runs, [settled.effort]: (t.helpers.runs[settled.effort] ?? 0) + 1 } } }
         }).catch(() => undefined)
-        void proof($, `helper ${e.subagentType} "${e.description}": ${waiting.effort} (${helper?.why})`)
       }
     }
     if (e.isTeammate || e.workflow || !('agentId' in result) || !result.agentId) return result
     const id = result.agentId
     const now = await $.clock.now()
     const rec: AgentRec = { id, type: e.fork ? 'fork' : e.subagentType, task: e.description, state: 'running', startedAt: now, model: result.model }
-    if (helper) {
-      rec.effort = EFFORT_LABELS[helper.effort]
-      rec.why = helper.why
+    if (settled) {
+      rec.effort = EFFORT_LABELS[settled.effort]
+      rec.why = settled.why
     }
     if (e.parentAgentId) rec.parentId = e.parentAgentId
     await update($, agentsState, list => [...list.filter(a => a.id !== id), rec].slice(-40))

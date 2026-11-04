@@ -135,6 +135,8 @@ A key set with `/plugin configure` is kept in Claude Code's secure storage. A ke
 
 Short follow-ups such as "go", "ok" or "yes" keep the effort already picked and ask no judge.
 
+The judge is not told which model the chat runs on, nor the effort in force. It gives one effort for each of Haiku, Sonnet and Opus, each on that model's own scale (a migration can be max on Haiku and high on Opus), and effortless applies the answer for the model in use. Switch models mid-chat and the pick follows that model's own answer. When a decision model is unsure of the answer for your model, Haiku has a second look; when it is still unsure, the effort stays as it was. `/effortless debug` shows the judge's answers next to what was applied.
+
 ## Keys and trust
 
 - The default judge needs **no key**: Haiku runs on your own Claude login.
