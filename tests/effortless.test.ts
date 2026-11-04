@@ -2289,6 +2289,25 @@ describe('running hot and judge down', () => {
 })
 
 describe('settings panel', () => {
+  test('settings asked for before a restart open after it, and drawing writes no state', async ($, on) => {
+    // The store outlives a restart, the state does not: the request the load before left for this chat.
+    mock.store(on, { openSettingsAt: { at: Date.now(), session: 'chat-1' } })
+    mock.env(on, {})
+    const mocked = mock.clock(on)
+    on('ui.status', () => ({ value: undefined }))
+    on('session.messages', () => ({ value: [] }) as never)
+    on('session.model', () => ({ value: 'claude-opus-5-5' }))
+    on('session.id', () => ({ value: 'chat-1' }) as never)
+    on('command.list', () => ({ value: [] as never }))
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
+    await mocked.advance(10)
+    await ui.redraw()
+    expect(await drawn(ui)).toContain('"key":"settings"')
+    const debug = String((await $.command.run({ command: 'effortless', args: 'debug' } as never)).text)
+    expect(debug).toContain('band error: none')
+    await ui.unmount()
+  })
+
   test('Test asks the picked judge one sample and says if it answered, or why not', { options: { layout: 'default' } } as never, async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)

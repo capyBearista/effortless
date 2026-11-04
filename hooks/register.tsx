@@ -1337,8 +1337,13 @@ async function restoreCache($: EngineInterface) {
   cacheRestored = true
   const memo = await read($, cacheMemo)
   if (!memo || cacheExpires !== 0 || memo.expires <= 0) {
-    // Nothing to go on: a "Cold" left in the shared state by the copy before is not this chat's cache.
-    if (cacheExpires === 0 && !coldForced && (await read($, cacheLeft)) === 0) await update($, cacheLeft, () => null)
+    // Nothing to go on: a "Cold" left in the shared state by the copy before is not this chat's cache. restoreCache runs
+    // from the draw, which may not write state: it is cleared just after.
+    if (cacheExpires === 0 && !coldForced && (await read($, cacheLeft)) === 0) {
+      $.clock.after(0, () => {
+        if (cacheExpires === 0 && !coldForced) void update($, cacheLeft, () => null).then(() => $.ui.invalidate('ui.render')).catch(() => undefined)
+      })
+    }
     return
   }
   cacheExpires = memo.expires
@@ -1889,6 +1894,12 @@ async function loadInstalledSkills($: EngineInterface) {
 }
 
 /** Opens the effortless settings panel above the prompt: the app does not let a plugin open its /plugin dialog. */
+/** Opens the panel a load before this one was asked to open (see openPluginSettings). From a timer the draw sets. */
+async function openSettingsPanel($: EngineInterface) {
+  await update($, settingsOpen, () => true)
+  $.ui.invalidate('ui.render')
+}
+
 async function openPluginSettings($: EngineInterface) {
   await loadInstalledSkills($)
   await update($, settingsOpen, () => true)
@@ -4211,6 +4222,8 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       void writeRenderLog($).catch(() => undefined)
     }
     try {
+    // The error shown in /effortless debug is the last draw's, not one from long ago.
+    lastRenderError = ''
     if (e.props.hasSurvey) {
       lastRenderBranch = 'stepped aside: the app has a survey in this spot'
       return next(e)
@@ -4222,7 +4235,8 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
         : null
     if (typeof askedHere === 'number') {
       await $.store.set('openSettingsAt', null)
-      if (Date.now() - askedHere < 60_000 && !(await read($, settingsOpen))) await update($, settingsOpen, () => true)
+      // Drawing may not change state (the store is not state): the panel opens just after this draw.
+      if (Date.now() - askedHere < 60_000 && !(await read($, settingsOpen))) $.clock.after(0, () => void openSettingsPanel($).catch(() => undefined))
     }
     lastRenderBranch = (await read($, settingsOpen)) ? 'drew the settings panel' : 'drew a band or nothing'
     const { Box, Text, Button, Svg, Link } = themedEls($.ui.resolve(e))
