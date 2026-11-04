@@ -21,7 +21,7 @@ const TERM_BAND = { plugin: 'effortless', surface: 'terminal', ...BAND } as neve
 /** A session for handoffs: records forks, commands, prompts sent and each main request's effort. The judge says `judged`. */
 function handoffEngine(on: On, model = 'claude-opus-5-5', judged = 'low') {
   mock.store(on)
-  mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+  mock.env(on, {})
   on('ui.status', () => ({ value: undefined }))
   on('session.messages', () => ({ value: [] }) as never)
   on('session.model', () => ({ value: model }))
@@ -33,7 +33,7 @@ function handoffEngine(on: On, model = 'claude-opus-5-5', judged = 'low') {
     forked.push(e.prompt)
     return { value: { isAnswered: true, text: 'Goal: quick.', usage: USAGE } } as never
   })
-  on('model.complete', () => ({ value: { isAnswered: true as const, text: `{"model":"opus","effort":"${judged}","why":"x"}`, usage: USAGE } }))
+  on('model.complete', () => ({ value: { isAnswered: true as const, text: `{"haiku":"${judged}","sonnet":"${judged}","opus":"${judged}","why":"x"}`, usage: USAGE } }))
   const ran: { command: string; args: string }[] = []
   on('command.run', (_$, e) => {
     ran.push({ command: e.command, args: e.args })

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelForkResult, Register, RenderInput } from 'claude-code'
 
-import type { AgentRec, Effort, HandoffAfter, HandoffChoice, ModelKey, Pick, SettingsDraft, Spent } from '../types'
+import type { AgentRec, Answers, Effort, HandoffAfter, HandoffChoice, JudgedModel, ModelAnswer, ModelKey, Pick, SettingsDraft, Spent } from '../types'
 import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolLine, touchOf, withTouch, withWaits } from './agents'
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
@@ -21,9 +21,10 @@ export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // 80k requests of real Claude Code use, cache reads are about 76% of a session's cost, cache writes 16% and output 8%: effort
 // mostly changes how many tool calls a prompt makes, not what one answer writes, so all four are counted.
 const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
-// Changing effort between two requests keeps the prompt cache on these models only. On Fable 5.1 and older Opus
-// the next request rewrote 56-100% of the cache (measured), which costs more than any effort can save.
-export const cacheSafe = (modelId: string) => /(opus|sonnet)-5-5/.test(modelId)
+// Changing effort between two requests keeps the prompt cache on these models only (Haiku 5.5 measured 2026-11-03: a
+// low -> max change read the whole cache). On Fable 5.1 and older Opus the next request rewrote 56-100% of the cache
+// (measured), which costs more than any effort can save. Haiku 4.5 takes no effort at all.
+export const cacheSafe = (modelId: string) => /(opus|sonnet|haiku)-5-5/.test(modelId)
 // The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
 let ACCENT = accent()
 /** Takes the theme the settings name; the accent and every drawing follow it. */
@@ -74,12 +75,11 @@ let BRAND_HEAD = '#221c3a'
 let HOVER_BOX = '#2b2b2f'
 const EFFORT_LABELS: Record<Effort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
 
-// Auto is two switches. `isAuto` is effort (the name stays: it is what the store and state hold);
-// `isAutoModel` lets the judge suggest another model and starts off.
+// Auto: whether the judge picks the effort.
 const isAuto = atom({ plugin: 'effortless', key: 'isAuto' } as const, true)
 const JEV_TIMEOUT_MS = 3000
 const JEV_URL = 'https://api.typesafe.ai/v1/systemone'
-const EMPTY_SPENT: Spent = { prompts: 0, requests: 0, input: 0, write: 0, read: 0, out: 0, byEffort: {}, judge: { jev: 0, haiku: 0, ms: 0, tokens: 0 }, moved: 0, redone: 0 }
+const EMPTY_SPENT: Spent = { prompts: 0, requests: 0, input: 0, write: 0, read: 0, out: 0, byEffort: {}, judge: { jev: 0, haiku: 0, ms: 0, tokens: 0 } }
 const SWITCHED_MS = 2500
 // The prompt cache lives this long after the last request read or wrote it. A response may say which lifetime its
 // cache writes got (usage.cache_creation: ephemeral_1h / ephemeral_5m); until one does, 1 hour is assumed: 99% of
@@ -104,10 +104,8 @@ const SLATE_BG = '#12141b'
 const SLATE_EDGE = '#39415a'
 const YELLOW = '#e0a33a'
 const RED = '#e5534b'
-const isAutoModel = atom({ plugin: 'effortless', key: 'isAutoModel' } as const, false)
 const pick = atom({ plugin: 'effortless', key: 'pick' } as const, null)
 const isJudging = atom({ plugin: 'effortless', key: 'isJudging' } as const, false)
-const suggestion = atom({ plugin: 'effortless', key: 'suggestion' } as const, null)
 const appEffort = atom({ plugin: 'effortless', key: 'appEffort' } as const, null)
 const model = atom({ plugin: 'effortless', key: 'model' } as const, null)
 // The last change Auto made to the effort, shown for a moment as "Low → High" and then cleared.
@@ -184,13 +182,12 @@ const installedSkills = atom({ plugin: 'effortless', key: 'installedSkills' } as
 const settingsDraft = atom({ plugin: 'effortless', key: 'settingsDraft' } as const, {})
 const judgeDown = atom({ plugin: 'effortless', key: 'judgeDown' } as const, null)
 // Which part of the settings panel is open: null for the cards.
-type SettingsCard = 'effort' | 'model' | 'judge' | 'handoff' | 'show' | 'models'
+type SettingsCard = 'effort' | 'judge' | 'handoff' | 'show' | 'models'
 const settingsCard = atom({ plugin: 'effortless', key: 'settingsCard' } as const, null)
 /** The settings panel's parts: a card each on the overview, and what the part is for, said once it is open. */
 const CARDS: readonly { id: SettingsCard; title: string; about: string }[] = [
   { id: 'effort', title: 'Effort', about: 'How hard Claude thinks. The slider tips close calls; Min and Max are hard limits.' },
-  { id: 'model', title: 'Model', about: "Whether a simple prompt may run on a cheaper model, and which model writes a compaction." },
-  { id: 'handoff', title: 'Handoff & alerts', about: 'The full handoff skill, when to suggest compacting, and which alerts show.' },
+  { id: 'handoff', title: 'Handoff & alerts', about: 'The full handoff skill, which model writes a compaction, when to suggest compacting, and which alerts show.' },
   { id: 'show', title: 'Customize', about: 'How effortless looks and which parts it shows. Uninstall removes it.' },
   { id: 'judge', title: 'Judge', about: 'Haiku judges prompts and handoffs. Add decision models for quicker effort calls. Test checks they answer.' },
 ]
@@ -198,11 +195,6 @@ const CARDS: readonly { id: SettingsCard; title: string; about: string }[] = [
 const MODELS_PART = { id: 'models', title: 'Models', about: 'Asked in order until one answers; Haiku judges when none does. ↑ moves one earlier.' } as const
 /** A part's name and what it does, sub-parts included. */
 const partOf = (card: SettingsCard) => (card === 'models' ? MODELS_PART : CARDS.find(c => c.id === card))
-// The Model card: the two ways to run. Effort follows the judge in both.
-const MODEL_CHOICES = [
-  { value: 'on', label: 'Cheaper when it can', tag: 'experimental', about: "A simple prompt may run on Haiku or Sonnet. Rarely pays: the other model has to reread the whole chat." },
-  { value: 'off', label: "Always the chat's", tag: '', about: "Every prompt keeps the model you picked. Only effort changes." },
-] as const
 const BIAS_WORDS = ['Cheapest', 'Cheaper', 'Balanced', 'Smarter', 'Smartest'] as const
 // The settings panel's judge test: running, or what it found. Null before a test and once the panel closes.
 const judgeTest = atom({ plugin: 'effortless', key: 'judgeTest' } as const, null)
@@ -348,32 +340,74 @@ const DONE_EDGE = '#2f7a4c'
 // The mark in the done green, for the titles of cards that have landed.
 const DONE_MARK_SVG = MARK_SVG.replace(/#7566d8/g, '#2f9a5e').replace(/#a79cf7/g, '#7fe0a4').replace(/#cfc7ff/g, '#c8f4d8')
 
-const JUDGE_SYSTEM = `You choose which Claude model and reasoning effort an agentic assistant (it reads files, runs tools and edits things, not only code) should use for the user's next message. Pick the cheapest pair that will still do the job well.
+// The models the judge answers for, each on its own scale. Fable is not asked: Auto pauses there.
+const JUDGED: readonly JudgedModel[] = ['haiku', 'sonnet', 'opus']
+/**
+ * What each effort level is for, per model. Effort levels mean a different amount of thinking on each model (Anthropic:
+ * "effort names don't mean the same amount of thinking across models"; Opus 5.5 defaults to medium, Fable 5.1 is
+ * recommended at high), so no fixed step between models holds: a trivial task is low everywhere, a migration is max on
+ * Haiku but high on Opus. shortcut: drafted from Anthropic's per-model starting points and the maintainer's examples, not
+ * measured; the external decisionbench project is where to measure it.
+ */
+const MODEL_LEVELS: Record<JudgedModel, { about: string; levels: Record<Effort, string> }> = {
+  haiku: {
+    about: 'Claude Haiku 5.5, the fastest and cheapest: fine for small, well-defined work, strained by hard multi-step work',
+    levels: {
+      low: 'chat, quick answers, short one-step tool tasks',
+      medium: 'ordinary work: a few tool calls or edits, normal coding',
+      high: 'longer multi-step tasks, multi-file changes, strict instructions',
+      xhigh: 'hard debugging, large refactors',
+      max: 'the hardest jobs it can try: migrations, architecture, long investigations',
+    },
+  },
+  sonnet: {
+    about: 'Claude Sonnet 5.5, strong at everyday coding and agent work',
+    levels: {
+      low: 'chat, writing, extraction, search; no planning',
+      medium: 'ordinary coding and multi-step tool work',
+      high: 'hard debugging, large refactors, careful reviews',
+      xhigh: 'very hard: long investigations, big migrations',
+      max: 'research-level work where a miss is very costly',
+    },
+  },
+  opus: {
+    about: 'Claude Opus 5.5, the strongest of the three: hard debugging and architecture need less effort from it',
+    levels: {
+      low: 'quick answers, small edits',
+      medium: 'most coding and debugging, multi-step work',
+      high: 'hard debugging, architecture, large refactors, migrations',
+      xhigh: 'very hard, long-horizon investigations',
+      max: 'the hardest research-level work',
+    },
+  },
+}
 
-Models, cheapest first:
-- haiku: quick questions, lookups, renames, small edits in one or two files, summaries, chit-chat. It can read files and run tools; pick it for any small, well-defined job.
-- sonnet: normal coding, edits across a few files, explanations, writing.
-- opus: hard debugging, architecture, large refactors, careful reviews.
-- fable: the hardest long-horizon or research-level work.
-
-Effort: low for quick answers, medium for normal work, high for hard problems, xhigh or max only for very hard ones.
-
-Effort is relative to the model in use ("Current" names it): a stronger model needs less effort for the same job. Opus at medium does about what Sonnet does at high, and Fable is stronger again. So for one and the same task pick one step lower on Opus than on Sonnet, and lower still on Fable; on Sonnet, go one step higher for hard work than you would on Opus.
-
-Judge the SCOPE and the amount of work, not whether it is code. A short message can ask for a lot: "go through my whole drive and clean it up", "review the entire repo", "migrate everything" are big, multi-step, tool-heavy jobs where mistakes are costly: never low, usually high. Low is only for answers that need no tools and no planning.
+// How to judge, for Haiku and the decision models alike. It never names the effort in force: the judge rates the
+// task; keeping an effort (a "go" between steps, a message typed while a task runs) is effortless's own decision.
+const EFFORT_RULES = `Judge the scope and the amount of work, not whether it is code. A short message can ask for a lot: "go through my whole drive and clean it up", "review the entire repo", "migrate everything" are big, multi-step, tool-heavy jobs where mistakes are costly. Low is only for answers that need no tools and no planning.
 
 If the message answers a question in the assistant's last reply (picks an option, says which one, confirms a plan), judge only the work that answer starts, as the reply describes it, not the length of the answer and not the work done before the question: "B" can mean "build the complicated section B" (high), while "yes" or "no" to one small action ("should I archive this?", "delete the old ones too?") is low, and picking a value for one setting (a log level, a colour, a font) is low. But picking which way to build something ("option 1", "the same shapes", "B") starts that build: judge the build. Approving a whole plan or several steps takes the effort of that plan. A plain "yes", "ok" or "do it" after "Is that OK? Then I'll build X" or "Should I build X?" approves building X: judge X, not the word.
 
-A message that pushes back on, corrects or adds to a plan or claim under discussion continues that work: keep at least the effort that work had, never drop to low for it. Thanks, praise or a closing remark with no new request is low. A question about how to do something, or about effort itself, that needs no tools is low.
+A message that pushes back on, corrects or adds to a plan or claim under discussion continues that work: judge the effort that work needs, never low. Thanks, praise or a closing remark with no new request is low. A question about how to do something, or about effort itself, that needs no tools is low.
 
 If the person asks for deep thought ("think hard", "ultrathink", "be thorough"), pick at least high; if they ask for a quick answer, pick low.
 
-If the message is a short follow-up to ongoing work ("yes", "go", "ok", "continue", or the same in any language), keep the current pair.
+Effort levels mean a different amount of thinking on each model, so answer for each model on its own scale: the same task can need different levels on different models.`
 
-Reply with JSON only: {"model":"haiku|sonnet|opus|fable","effort":"low|medium|high|xhigh|max","sure":0.0-1.0 how sure you are of the effort,"why":"at most 6 words, in the user's language"}`
+const JUDGE_SYSTEM = `You choose the reasoning effort an agentic assistant (it reads files, runs tools and edits things, not only code) should use for the user's next message: the cheapest effort that will still do the job well, once for each of three Claude models.
 
-/** Reads `{ model, effort, why }` out of a reply, or nothing when it doesn't hold one. */
-export function parseVerdict(text: string): { model: ModelKey; effort: Effort; why: string; sure?: number; handoff?: string } | undefined {
+${JUDGED.map(m => `${m}: ${MODEL_LEVELS[m].about}.\n${EFFORTS.map(e => `- ${e}: ${MODEL_LEVELS[m].levels[e]}`).join('\n')}`).join('\n\n')}
+
+${EFFORT_RULES}
+
+Reply with JSON only: {"haiku":"low|medium|high|xhigh|max","sonnet":"low|medium|high|xhigh|max","opus":"low|medium|high|xhigh|max","sure":0.0-1.0 how sure you are,"why":"at most 6 words, in the user's language"}`
+
+/** A judge's answer: its effort for each model it answered for, and who said it. */
+type Verdict = { efforts: Answers; why: string; by: 'jev' | 'haiku'; judgeName?: string }
+
+/** Haiku's reply as a verdict: an effort per model, one sure and why. A model with no valid level is left out; nothing
+ * when no model has one. */
+export function parseVerdict(text: string): Verdict | undefined {
   const match = text.match(/\{[\s\S]*\}/)
   if (!match) return undefined
   let raw: unknown
@@ -383,14 +417,14 @@ export function parseVerdict(text: string): { model: ModelKey; effort: Effort; w
     return undefined
   }
   if (typeof raw !== 'object' || raw === null) return undefined
-  const { model, effort, why, sure, handoff } = raw as Record<string, unknown>
-  const key = typeof model === 'string' ? model.toLowerCase() : ''
-  const found = MODELS.find(m => key === m.key || key === m.id || key.includes(m.key))
-  if (!found || !EFFORTS.includes(effort as Effort)) return undefined
-  const how = typeof sure === 'number' && sure >= 0 && sure <= 1 ? { sure } : {}
-  // Only a reason counts: "handoff":"" or false is no advice.
-  const advice = typeof handoff === 'string' && handoff.trim() ? { handoff: handoff.trim().slice(0, 70) } : {}
-  return { model: found.key, effort: effort as Effort, why: typeof why === 'string' ? why.slice(0, 60) : '', ...how, ...advice }
+  const o = raw as Record<string, unknown>
+  const sure = typeof o.sure === 'number' && o.sure >= 0 && o.sure <= 1 ? o.sure : undefined
+  const efforts: Answers = {}
+  for (const m of JUDGED) {
+    if (EFFORTS.includes(o[m] as Effort)) efforts[m] = sure === undefined ? { effort: o[m] as Effort } : { effort: o[m] as Effort, sure }
+  }
+  if (!Object.keys(efforts).length) return undefined
+  return { efforts, why: typeof o.why === 'string' ? o.why.slice(0, 60) : '', by: 'haiku' }
 }
 
 /**
@@ -404,7 +438,8 @@ async function recentContext($: EngineInterface): Promise<string> {
 
 /** The context text from the conversation so far: the last user message, short, and the assistant's last reply's end. */
 export function contextFrom(messages: readonly { role: string; text: string }[]): string {
-  const lastUser = [...messages].reverse().find(m => m.role === 'user')
+  // A turn with no text of its own (a tool result, an image) says nothing: the person's last words are what count.
+  const lastUser = [...messages].reverse().find(m => m.role === 'user' && m.text.trim())
   const lastAssistant = lastAssistantText(messages)
   return [lastUser ? `user: ${lastUser.text.slice(0, 400)}` : '', lastAssistant ? `assistant: ${lastAssistant.slice(-2000)}` : '']
     .filter(Boolean)
@@ -417,32 +452,13 @@ function lastAssistantText(messages: readonly { role: string; text: string }[]):
 }
 
 
-// Jev answers typed questions with probabilities; these are the options it picks between.
-const JEV_EFFORTS: Record<Effort, string> = {
-  low: 'quick answer, no tools, no planning',
-  medium: 'normal work: a few tool calls or edits',
-  high: 'hard or large multi-step job: many tool calls, costly mistakes',
-  xhigh: 'very hard: a long investigation',
-  max: 'the hardest research-level work',
-}
-const JEV_MODELS: Record<ModelKey, string> = {
-  haiku: 'trivial questions, lookups, renames, chit-chat',
-  sonnet: 'normal coding, edits across a few files, explanations, writing',
-  opus: 'hard debugging, architecture, large refactors, careful reviews',
-  fable: 'the hardest long-horizon or research-level work',
-}
-const JEV_TASK =
-  'Choose the reasoning effort (and model) an agentic assistant should use for the next user message. It reads files, ' +
-  'runs tools and edits things, not only code. Pick the cheapest that still does the job well. Judge the scope and the ' +
-  'amount of work, not whether it is code: "go through my whole drive and clean it up" is a big tool-heavy job. ' +
-  'Effort is relative to current_model: a stronger model needs less for the same job. Opus at medium does about what ' +
-  'Sonnet does at high, so for one task pick one step lower on Opus than on Sonnet. ' +
-  'A short follow-up ("yes", "go", "ok", in any language) keeps the current effort. When the message answers a ' +
-  "question in the assistant's last reply (picks an option), judge only the work that answer starts, not its length and " +
-  'not the work before the question: yes/no to one small action, or picking a value for one setting (a log level, a colour), is low; picking which way to build something starts that build, so judge the build; ' +
-  'approving a whole plan takes the effort of that plan; a plain yes to "Then I will build X" means judge X. Pushing back on or adding to a plan under discussion continues that work: keep its effort, never low. Thanks or a closing remark with no new request is low. A ' +
-  'question about how to do something that needs no tools is low. "think hard", "ultrathink" or "be thorough" means ' +
-  'at least high; "quick question" means low.'
+// The decision models' task: the same rules as Haiku's, one typed question per model.
+const JEV_TASK = `Choose the reasoning effort an agentic assistant should use for the next user message, once for each model asked. It reads files, runs tools and edits things, not only code. Pick the cheapest effort that still does the job well.
+
+${EFFORT_RULES}`
+const JEV_QUESTIONS = Object.fromEntries(
+  JUDGED.map(m => [`effort_${m}`, { type: 'choice', instructions: `Which effort should ${MODEL_LEVELS[m].about} use for the next message?`, criteria: MODEL_LEVELS[m].levels }]),
+)
 
 /** The skill or custom command a typed "/name args" runs, or nothing for the app's own commands and effortless's. */
 async function typedSkill($: EngineInterface, text: string): Promise<{ name: string; description: string } | undefined> {
@@ -498,11 +514,12 @@ export function withAttachments(text: string, attachments?: readonly { type: str
 [The message comes with ${said} to look at.]`
 }
 
-/** The message as the judge reads it when it was typed while a task was still running. */
-export function withMidTurn(text: string, effort: Effort): string {
+/** The message as the judge reads it when it was typed while a task was still running. The effort that task runs at
+ * stays out: a lower verdict waits for the turn to end (heldPick), so the running task is safe either way. */
+export function withMidTurn(text: string): string {
   return `${text}
 
-[Sent while the assistant was still working on the last task at ${effort} effort. If it adds to, corrects or steers that task, keep ${effort}; judge it on its own only if it is a separate new request.]`
+[Sent while the assistant was still working on the last task. If it adds to, corrects or steers that task, judge the effort that task needs; judge it on its own only if it is a separate new request.]`
 }
 // A lower verdict for a message typed mid-turn, applied when that turn ends (see prompt.submit).
 let heldPick: Pick | null = null
@@ -523,28 +540,49 @@ export function parseEnvLine(text: string, name: string): string | undefined {
   return value || undefined
 }
 
-/**
- * Jev's answer as a verdict. Below even odds on the effort it is unsure, and an unsure call keeps the
- * current effort: that is what a "go" between two steps of work should do.
- */
+// The band's words when effortless kept the effort because the judge was unsure.
 const UNSURE = 'unsure, keeping'
-export function parseJevAnswer(text: string, current: Pick | null): { model: ModelKey; effort: Effort; why: string; sure?: number } | undefined {
-  let json: Record<string, unknown>
+/** A decision model below even odds on this model's effort. Haiku's own sure (self-reported) only tips the slider. */
+export const isUnsure = (by: Verdict['by'] | Pick['by'], answer: ModelAnswer | undefined) => by === 'jev' && (answer?.sure ?? 1) < 0.5
+
+/**
+ * A decision model's reply as a verdict: each model's choice and how sure it was (its confidence, else the choice's
+ * probability), as given. The answers may sit under `answers`, `result.answers` or at the top level. A model with no
+ * valid level is left out; nothing when no model has one. Whether an answer is sure enough is the caller's call.
+ */
+export function parseJevAnswer(text: string): Verdict | undefined {
+  let json: unknown
   try {
     json = JSON.parse(text)
   } catch {
     return undefined
   }
-  const answers = (json.answers ?? (json.result as Record<string, unknown> | undefined)?.answers) as
-    | Record<string, { choice?: string; confidence?: number; probabilities?: Record<string, number> }>
-    | undefined
-  const effort = answers?.effort?.choice as Effort | undefined
-  if (!effort || !EFFORTS.includes(effort)) return undefined
-  const model = MODELS.find(m => m.key === answers?.model?.choice)?.key ?? current?.model ?? 'sonnet'
-  const sure = answers?.effort?.confidence ?? answers?.effort?.probabilities?.[effort]
-  if (current && typeof sure === 'number' && sure < 0.5) return { model, effort: current.effort, why: UNSURE, sure }
-  if (typeof sure !== 'number') return { model, effort, why: '' }
-  return { model, effort, why: `${Math.round(sure * 100)}% sure`, sure }
+  if (typeof json !== 'object' || json === null) return undefined
+  const o = json as Record<string, any>
+  const answers = (o.answers ?? o.result?.answers ?? o) as Record<string, { choice?: string; confidence?: number; probabilities?: Record<string, number> } | undefined>
+  const efforts: Answers = {}
+  for (const m of JUDGED) {
+    const a = answers[`effort_${m}`]
+    const effort = a?.choice as Effort | undefined
+    if (!effort || !EFFORTS.includes(effort)) continue
+    const sure = a?.confidence ?? a?.probabilities?.[effort]
+    efforts[m] = typeof sure === 'number' ? { effort, sure } : { effort }
+  }
+  return Object.keys(efforts).length ? { efforts, why: '', by: 'jev' } : undefined
+}
+
+/** How sure a decision model was, in the band's words ("70% sure"); nothing when it did not say. */
+const sureWords = (answer: ModelAnswer) => (answer.sure !== undefined ? `${Math.round(answer.sure * 100)}% sure` : '')
+
+/** A verdict's answers in a line: "haiku max · sonnet high · opus medium 40% (unsure)", for debug and the panel's Test. */
+export function answersText(v: Verdict): string {
+  return JUDGED.filter(m => v.efforts[m])
+    .map(m => {
+      const a = v.efforts[m]!
+      const sure = a.sure !== undefined && v.by === 'jev' ? ` ${Math.round(a.sure * 100)}%` : ''
+      return `${m} ${a.effort}${sure}${isUnsure(v.by, a) ? ' (unsure)' : ''}`
+    })
+    .join(' · ')
 }
 
 let askJevFile: EnvAsk | undefined
@@ -570,7 +608,7 @@ async function jevKey($: EngineInterface): Promise<string | undefined> {
   return askJevFile
 }
 
-type Judged = { verdict?: Pick; tokens: number }
+type Judged = { verdict?: Verdict; tokens: number }
 
 /** Why a judge the person picked could not answer, in words: what a status code means for them. */
 export function judgeFailure(name: string, status: number | 'timeout'): string {
@@ -628,8 +666,6 @@ export type JudgeConfig = {
   compactWith: 'haiku' | 'session'
   /** advised: the footer slot is Compact until Haiku advises a handoff. always: it is always the Handoff button. */
   handoffButton: 'advised' | 'always'
-  /** A prompt the judge calls simple runs on a cheaper model than the chat's (never a dearer one). */
-  modelAuto: 'on' | 'off'
   /** on: every subagent the chat sends off gets an effort picked by the judge before it starts. */
   helpers: 'on' | 'off'
   /** The accent colour of everything effortless draws: the brand violet, Claude orange or cherry-blossom rose. */
@@ -668,7 +704,6 @@ let config: JudgeConfig = {
   layout: 'default',
   compactWith: 'haiku',
   handoffButton: 'advised',
-  modelAuto: 'off',
   helpers: 'off',
   theme: 'violet',
   appearance: 'auto',
@@ -711,9 +746,6 @@ export function readConfig(options: unknown): JudgeConfig {
     layout: str(o.layout) === 'minimal' ? 'minimal' : 'default',
     compactWith: str(o.compactWith) === 'session' ? 'session' : 'haiku',
     handoffButton: str(o.handoffButton) === 'always' ? 'always' : 'advised',
-    // Off unless switched on: one prompt on another model rewrites the whole chat into that model's cache, which costs
-    // more than it saves in a chat that is in use (measured 2026-10-10).
-    modelAuto: str(o.modelAuto) === 'on' ? 'on' : 'off',
     helpers: str(o.helpers) === 'on' ? 'on' : 'off',
     theme: THEMES.find(t => t === str(o.theme)) ?? 'violet',
     appearance: (['dark', 'light'] as const).find(a => a === str(o.appearance)) ?? 'auto',
@@ -725,47 +757,42 @@ export function readConfig(options: unknown): JudgeConfig {
   }
 }
 
-/** The text the judge reads: the current pair, the last turns and the next message. */
-function judgeQuestion(prompt: string, current: Pick | null, context: string): string {
-  return [
-    current ? `Current: ${current.model} / ${current.effort}` : 'Current: none',
-    context ? `Recent conversation:\n${context}` : '',
-    `Next message:\n${prompt.slice(0, 2000)}`,
-  ]
-    .filter(Boolean)
-    .join('\n\n')
+/** The text Haiku reads: the last turns and the next message. Not the model in use nor the effort in force: the verdict
+ * answers for every model, and effortless applies the one that runs. */
+function judgeQuestion(prompt: string, context: string): string {
+  return [context ? `Recent conversation:\n${context}` : '', `Next message:\n${prompt.slice(0, 2000)}`].filter(Boolean).join('\n\n')
 }
 
 /**
- * Haiku always judges; Jev is the optional quick one. Jev is asked first when a TypeSafe key is found (unless the
- * setting is haiku), and Haiku makes the call whenever Jev is unsure, down or slow. Any judge that fails or takes longer than JEV_TIMEOUT_MS falls back to
- * Haiku, which needs nothing but the session's own login. Never throws.
+ * Haiku always judges; decision models (or Jev on TypeSafe) are the optional quick ones, asked first unless the setting
+ * is haiku. Haiku makes the call when they fail, are slow, or are unsure of (or silent on) the effort for `target`, the
+ * model the answer is for. With no target (a helper, whose model is not known yet) the answer is taken as it is and
+ * each request checks its own model's entry. Never throws.
  */
-async function judge($: EngineInterface, prompt: string, current: Pick | null): Promise<Judged> {
+async function judge($: EngineInterface, prompt: string, target: JudgedModel | null): Promise<Judged> {
   const context = await recentContext($).catch(() => '')
+  let first: Judged | undefined
   // Fork: with decision models set, they replace the TypeSafe-only Jev; Haiku still has the last word.
-  if (config.judge !== 'haiku' && config.decisionModels.length) {
-    const jev = (await askChain($, prompt, current, context))?.judged
-    if (jev) return jev.verdict?.why === UNSURE ? haikuAfter($, jev, prompt, current, context) : jev
-    return askHaiku($, prompt, current, context)
+  if (config.judge !== 'haiku' && config.decisionModels.length) first = (await askChain($, prompt, context))?.judged
+  else {
+    const key = config.judge !== 'haiku' ? await jevKey($).catch(() => undefined) : undefined
+    if (key) first = await askJev($, key, prompt, context)
   }
-  const key = config.judge !== 'haiku' ? await jevKey($).catch(() => undefined) : undefined
-  if (key) {
-    const jev = await askJev($, key, prompt, current, context)
-    if (jev) return jev.verdict?.why === UNSURE ? haikuAfter($, jev, prompt, current, context) : jev
-  }
-  return askHaiku($, prompt, current, context)
+  if (!first?.verdict) return askHaiku($, prompt, context)
+  if (target && (!first.verdict.efforts[target] || isUnsure(first.verdict.by, first.verdict.efforts[target]))) return haikuAfter($, first, prompt, context)
+  return first
 }
 
-/** Jev was unsure: Haiku makes the call, and both judges' tokens count. */
-async function haikuAfter($: EngineInterface, jev: Judged, prompt: string, current: Pick | null, context: string): Promise<Judged> {
-  const haiku = await askHaiku($, prompt, current, context)
-  return haiku.verdict ? { verdict: haiku.verdict, tokens: haiku.tokens + jev.tokens } : jev
+/** A decision model was unsure: Haiku makes the call, and both judges' tokens count. Without Haiku's answer the unsure
+ * one is returned as it is, for the caller to keep the effort in force. */
+async function haikuAfter($: EngineInterface, jev: Judged, prompt: string, context: string): Promise<Judged> {
+  const haiku = await askHaiku($, prompt, context)
+  return { verdict: haiku.verdict ?? jev.verdict, tokens: haiku.tokens + jev.tokens }
 }
 
 /** Jev on TypeSafe: an answer, or nothing when it fails, is unsure of its own format or takes too long. */
-async function askJev($: EngineInterface, key: string, prompt: string, current: Pick | null, context: string): Promise<Judged | undefined> {
-  const asked = await askDecision($, { name: 'Jev', url: (await envJevUrl($)) ?? JEV_URL, model: 'jev-latest', key, timeoutMs: JEV_TIMEOUT_MS }, prompt, current, context)
+async function askJev($: EngineInterface, key: string, prompt: string, context: string): Promise<Judged | undefined> {
+  const asked = await askDecision($, { name: 'Jev', url: (await envJevUrl($)) ?? JEV_URL, model: 'jev-latest', key, timeoutMs: JEV_TIMEOUT_MS }, prompt, context)
   if ('judged' in asked) return asked.judged
   if (!asked.quiet) warnJudge($, asked.reason)
   return undefined
@@ -807,16 +834,17 @@ async function hasOpenRouterKey($: EngineInterface): Promise<boolean> {
 
 // The decision model that answered the last prompt, and how fast: for /effortless debug.
 let lastChainAnswer = ''
+// The last verdict as the judge gave it, before effortless's settings, and what was applied: for /effortless debug.
+let lastVerdictLine = ''
 
 /**
  * Fork: the decision models in the order set, each until one answers. A failed one passes to the next; a model with
- * no key is skipped without a request. An unsure answer still ends the chain (Haiku decides, as with Jev). The person
+ * no key is skipped without a request. An unsure answer still ends the chain (Haiku may decide, as with Jev). The person
  * hears only when none answered, once, with the last reason. Never throws.
  */
 async function askChain(
   $: EngineInterface,
   prompt: string,
-  current: Pick | null,
   context: string,
   // The panel's Test passes its draft: the models and an OpenRouter key not saved yet.
   routes: readonly DecisionRoute[] = config.decisionModels,
@@ -842,7 +870,7 @@ async function askChain(
     }
     const url = route.provider === 'zen' ? ZEN_URL : route.provider === 'openrouter' ? OPENROUTER_URL : ((await envJevUrl($)) ?? JEV_URL)
     const askedAt = await $.clock.now()
-    const asked = await askDecision($, { name, url, model: route.model, key, timeoutMs, label: routeShortName(route) }, prompt, current, context)
+    const asked = await askDecision($, { name, url, model: route.model, key, timeoutMs, label: routeShortName(route) }, prompt, context)
     if ('judged' in asked) {
       const took = (((await $.clock.now()) - askedAt) / 1000).toFixed(1)
       lastChainAnswer = `${routeLabel(route)} ${took} s`
@@ -864,7 +892,6 @@ async function askDecision(
   $: EngineInterface,
   ask: { name: string; url: string; model: string; key?: string; timeoutMs: number; label?: string },
   prompt: string,
-  current: Pick | null,
   context: string,
 ): Promise<{ judged: Judged } | { reason: string; quiet?: true }> {
   try {
@@ -879,17 +906,9 @@ async function askDecision(
         headers,
         body: JSON.stringify({
           model: ask.model,
-          state: {
-            task: JEV_TASK,
-            current_model: current?.model ?? null,
-            current_effort: current?.effort ?? null,
-            recent_conversation: context,
-            next_message: prompt.slice(0, 4000),
-          },
-          questions: {
-            effort: { type: 'choice', instructions: 'Which effort fits the next message?', criteria: JEV_EFFORTS },
-            model: { type: 'choice', instructions: 'Which model fits the next message?', criteria: JEV_MODELS },
-          },
+          // Neither the model in use nor the effort in force: the same message gets the same question.
+          state: { task: JEV_TASK, recent_conversation: context, next_message: prompt.slice(0, 4000) },
+          questions: JEV_QUESTIONS,
         }),
       }),
       $.clock.sleep(ask.timeoutMs).then(() => {
@@ -897,7 +916,7 @@ async function askDecision(
       }),
     ])
     if (!res.ok) return { reason: judgeFailure(ask.name, res.status) }
-    const verdict = parseJevAnswer(res.text, current)
+    const verdict = parseJevAnswer(res.text)
     if (verdict) {
       let used = 0
       try {
@@ -907,7 +926,7 @@ async function askDecision(
         // No usage in the reply: counted as 0.
       }
       if (await read($, judgeDown)) await update($, judgeDown, () => null)
-      return { judged: { verdict: { ...verdict, by: 'jev', ...(ask.label ? { judgeName: ask.label } : {}) }, tokens: used } }
+      return { judged: { verdict: { ...verdict, ...(ask.label ? { judgeName: ask.label } : {}) }, tokens: used } }
     }
     return { reason: `${ask.name} gave no usable answer`, quiet: true }
   } catch (error) {
@@ -926,14 +945,13 @@ const JUDGE_TEST_PROMPT = 'rename one variable in a single file'
 async function testJudge($: EngineInterface, judgeKind: string, draftKey: string, draftChain = chainIds(config.decisionModels), draftOrKey = ''): Promise<{ ok: boolean; text: string }> {
   const start = await $.clock.now()
   const took = async () => `${(((await $.clock.now()) - start) / 1000).toFixed(1)} s`
-  const said = (name: string, j: Judged | undefined) =>
-    j?.verdict?.why === UNSURE ? `${name} answered, unsure on the sample` : `${name} answered: ${j?.verdict?.effort}`
+  const said = (name: string, j: Judged | undefined) => `${name} answered: ${j?.verdict ? answersText(j.verdict) : 'nothing'}`
   judgeTesting = {}
   try {
     // Fork: with decision models set, the test walks them as a prompt would and names the one that answered.
     const routes = parseDecisionModels(draftChain)
     if (judgeKind !== 'haiku' && routes.length) {
-      const chained = await askChain($, JUDGE_TEST_PROMPT, null, '', routes, draftOrKey)
+      const chained = await askChain($, JUDGE_TEST_PROMPT, '', routes, draftOrKey)
       const before = chained?.misses.length ? ` · ${chained.misses.join(' · ')}` : ''
       if (chained) return { ok: true, text: `${said(chained.name, chained.judged)} in ${await took()}${before}` }
       return { ok: false, text: judgeTesting.reason ?? 'No decision model gave a usable answer' }
@@ -942,12 +960,12 @@ async function testJudge($: EngineInterface, judgeKind: string, draftKey: string
       const key = parseJevKey(draftKey) ?? (draftKey.trim() || undefined) ?? (await jevKey($).catch(() => undefined)) ?? (await typesafeKeyAnywhere($).catch(() => undefined))
       if (!key && judgeKind === 'jev') return { ok: false, text: 'No TypeSafe key found' }
       if (key) {
-        const j = await askJev($, key, JUDGE_TEST_PROMPT, null, '')
+        const j = await askJev($, key, JUDGE_TEST_PROMPT, '')
         if (j?.verdict) return { ok: true, text: `${said('Jev', j)} in ${await took()}` }
         return { ok: false, text: judgeTesting.reason ?? 'Jev gave no usable answer' }
       }
     }
-    const h = await askHaiku($, JUDGE_TEST_PROMPT, null, '')
+    const h = await askHaiku($, JUDGE_TEST_PROMPT, '')
     return h.verdict ? { ok: true, text: `${said('Haiku', h)} in ${await took()}` } : { ok: false, text: 'Haiku gave no answer' }
   } catch (error) {
     return { ok: false, text: String(error).slice(0, 80) }
@@ -957,9 +975,9 @@ async function testJudge($: EngineInterface, judgeKind: string, draftKey: string
 }
 
 /** Haiku through the session's own login: the judge that needs no key, and the fallback for the others. */
-async function askHaiku($: EngineInterface, prompt: string, current: Pick | null, context: string): Promise<Judged> {
+async function askHaiku($: EngineInterface, prompt: string, context: string): Promise<Judged> {
   const used = lastContext && lastContext.window ? `Context used: ${Math.round(lastContext.percent)}% of the window` : ''
-  const asked = [judgeQuestion(prompt, current, context), used].filter(Boolean).join('\n\n')
+  const asked = [judgeQuestion(prompt, context), used].filter(Boolean).join('\n\n')
   const ask = (model: string) => $.model.complete({ model, system: JUDGE_SYSTEM, prompt: asked, maxTokens: 160, effort: 'low', timeoutMs: 6000 })
   // Haiku 5.5 by name: Claude Code builds that predate it map the plain alias to Haiku 4.5, at ten times the price.
   // Where 5.5 does not answer, the alias stands in.
@@ -967,7 +985,7 @@ async function askHaiku($: EngineInterface, prompt: string, current: Pick | null
   if (!r.isAnswered) r = await ask('haiku')
   const verdict = r.isAnswered ? parseVerdict(r.text) : undefined
   const tokens = r.isAnswered && r.usage ? r.usage.input_tokens + r.usage.output_tokens : 0
-  return { verdict: verdict && { ...verdict, by: 'haiku' }, tokens }
+  return { verdict, tokens }
 }
 
 // Whether a fresh chat would now serve better than carrying on: Haiku's call, whatever judge picks the effort. It runs
@@ -1048,18 +1066,31 @@ function keyOf(id: string): ModelKey | undefined {
 
 /** Records the model the session now runs; the pick follows it, so the band never shows a stale one. */
 async function modelIs($: EngineInterface, id: string) {
-  const pause = !cacheSafe(id) && keyOf(id) !== 'haiku'
+  const pause = !cacheSafe(id)
   if (pause !== (await read($, paused))) await update($, paused, () => pause)
   const key = keyOf(id)
   if (!key || key === (await read($, model))) return
   await update($, model, () => key)
-  // The engine's effort can differ per model, so a change across a switch is not the person's doing;
-  // and a model turned down earlier may be suggested again.
+  // The engine's effort can differ per model, so a change across a switch is not the person's doing.
   engineEffort = undefined
-  declined = null
   const current = await read($, pick)
-  if (current && current.model !== key) await choose($, { ...current, model: key })
-  if ((await read($, suggestion)) === key) await update($, suggestion, () => null)
+  if (current && current.model !== key) {
+    // A judged pick takes the new model's own answer, through the person's settings; a level they set or named stays.
+    // Also with Auto off, so turning it back on never brings the old model's answer. A decision model's why is how sure
+    // it was, so that is said anew; Haiku's holds for every model.
+    const answer = key !== 'fable' ? current.judged?.[key] : undefined
+    const why = current.by === 'jev' || current.why === UNSURE ? (answer ? sureWords(answer) : '') : current.why
+    const own = answer && !isUnsure(current.by, answer) ? { ...(await settledPick($, answer, why)), sure: answer.sure } : {}
+    await choose($, { ...current, model: key, ...own })
+  }
+}
+
+/** A judge's answer for the chat's model within the person's slider, Min and Max and save mode, and the band's why. */
+async function settledPick($: EngineInterface, answer: ModelAnswer, why: string): Promise<{ effort: Effort; why: string }> {
+  const saving = (await read($, saveUntil)) !== null
+  const leaned = bounded(tipped(answer.effort, answer.sure, config.bias), config.floor, config.ceiling)
+  const effort = capped(leaned, saving)
+  return { effort, why: effort !== leaned ? 'save mode' : leaned !== answer.effort ? 'your settings' : why }
 }
 
 async function sessionModel($: EngineInterface): Promise<ModelKey> {
@@ -1077,7 +1108,6 @@ type EnvAsk = Promise<string | undefined> | undefined
 let askLog: EnvAsk
 let askTemp: EnvAsk
 let askTmpdir: EnvAsk
-let askModelUi: EnvAsk
 let askJevUrl: EnvAsk
 let askJevKey: EnvAsk
 let askOpenRouterKey: EnvAsk
@@ -1086,7 +1116,6 @@ let askHome: EnvAsk
 const envLog = ($: EngineInterface) => (askLog = askLog ?? $.env.get('EFFORTLESS_LOG'))
 const envTemp = ($: EngineInterface) => (askTemp = askTemp ?? $.env.get('TEMP'))
 const envTmpdir = ($: EngineInterface) => (askTmpdir = askTmpdir ?? $.env.get('TMPDIR'))
-const envModelUi = ($: EngineInterface) => (askModelUi = askModelUi ?? $.env.get('EFFORTLESS_MODEL_UI'))
 const envJevUrl = ($: EngineInterface) => (askJevUrl = askJevUrl ?? $.env.get('JEV_URL'))
 const envJevKey = ($: EngineInterface) => (askJevKey = askJevKey ?? $.env.get('TYPESAFE_API_KEY'))
 const envOpenRouterKey = ($: EngineInterface) => (askOpenRouterKey = askOpenRouterKey ?? $.env.get('OPENROUTER_API_KEY'))
@@ -1120,8 +1149,6 @@ let lastTyped = ''
 // The toast about pressing Enter is shown once; on every click it is only noise.
 let toldAboutEnter = false
 let lastFooter = ''
-// A model the person turned down; not suggested again until they pick something else.
-let declined: ModelKey | null = null
 
 /**
  * Types a slash command into the prompt box for the person to send with Enter. A command the person
@@ -1145,19 +1172,6 @@ async function typeCommand($: EngineInterface, text: string): Promise<boolean> {
   }
 }
 
-/** A model change reloads the context, so it only happens when the person says yes. */
-async function switchModel($: EngineInterface, model: ModelKey) {
-  try {
-    await $.command.run({ command: 'model', args: model })
-    declined = null
-    await update($, suggestion, () => null)
-    const current = await read($, pick)
-    if (current) await choose($, { ...current, model })
-  } catch {
-    $.ui.toast('Could not switch the model right now')
-  }
-}
-
 /**
  * The tally in its current shape. A hot reload keeps the state an older version wrote ({ requests, actual,
  * baseline } before 0.2.0), so every read goes through this.
@@ -1175,8 +1189,6 @@ export function asSpent(t: unknown): Spent {
     out: num(v.out),
     byEffort: v.byEffort && typeof v.byEffort === 'object' ? v.byEffort : {},
     judge: { jev: num(judged.jev), haiku: num(judged.haiku), ms: num(judged.ms), tokens: num(judged.tokens) },
-    moved: num(v.moved),
-    redone: num(v.redone),
     helpers: {
       runs: v.helpers?.runs && typeof v.helpers.runs === 'object' ? v.helpers.runs : {},
       requests: num(v.helpers?.requests),
@@ -1395,16 +1407,6 @@ export function resetLabel(iso: string | null, now: number): string {
   const at = new Date(iso)
   const hm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
   return at.getTime() - now < 20 * 3600_000 ? hm : `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][at.getDay()]} ${hm}`
-}
-
-/**
- * A message that says the last answer was wrong or did not work. After a prompt ran on a cheaper model, this is the
- * signal the cheaper model missed: the retry and the next few prompts stay on the chat's own model.
- */
-const REDO_RE = /^(no|nope|nah)(?![a-z'])(?! +(problem|worries|thanks|thank|need|rush|hurry))|^(that'?s |this is |it'?s )?(wrong|incorrect|not (right|correct|what i))|^(it |that |this )?(still )?(doesn'?t|didn'?t|isn'?t|does not|did not|is not) (work|fix|help|change|run|compile|pass)|^still (not|broken|wrong|failing|fails|the same|happening|doesn'?t)|^(not working|try again|do it again|redo|you missed|you forgot|you broke)|^(fel|inte rätt|funkar inte|fungerar inte|försök igen|gör om|det är fel)(?![a-zåäö])|(still (broken|wrong|failing)|try again|funkar fortfarande inte)/i
-export const REDO_STAY_PROMPTS = 4
-export function looksLikeRedo(text: string): boolean {
-  return REDO_RE.test(text.trim().replace(/^["'“ ]+/, ''))
 }
 
 /**
@@ -1915,7 +1917,6 @@ const SETTING_FIELDS = {
   layout: 'layout',
   compactWith: 'compactWith',
   handoffButton: 'handoffButton',
-  modelAuto: 'modelAuto',
   helpers: 'helpers',
   theme: 'theme',
   appearance: 'appearance',
@@ -1949,7 +1950,6 @@ async function saveSetting($: EngineInterface, field: keyof typeof SETTING_FIELD
     layout: config.layout,
     compactWith: config.compactWith,
     handoffButton: config.handoffButton,
-    modelAuto: config.modelAuto,
     helpers: config.helpers,
     theme: config.theme,
     appearance: config.appearance,
@@ -2241,7 +2241,7 @@ export function savedText(raw: Spent): string {
   const t = asSpent(raw)
   const judged = t.judge.jev + t.judge.haiku
   const helperRuns = EFFORTS.reduce((n, e) => n + (t.helpers.runs[e] ?? 0), 0)
-  if (t.prompts === 0 && judged === 0 && t.moved === 0 && helperRuns === 0) return 'nothing measured yet'
+  if (t.prompts === 0 && judged === 0 && helperRuns === 0) return 'nothing measured yet'
   const input = t.input * WEIGHT.input
   const write = t.write * WEIGHT.write
   const cached = t.read * WEIGHT.read
@@ -2256,9 +2256,6 @@ export function savedText(raw: Spent): string {
     return `${EFFORT_LABELS[e]} ${b.prompts}, average ${tokens(Math.round(b.cost / b.prompts))}`
   })
   if (per.length) lines.push(`Per prompt: ${per.join('; ')}`)
-  if (t.moved) {
-    lines.push(`Cheaper model: ${t.moved} prompt${t.moved === 1 ? '' : 's'} moved down, ${t.redone} redone (${share(t.redone, t.moved)})`)
-  }
   if (helperRuns) {
     const per = EFFORTS.filter(e => t.helpers.runs[e]).map(e => `${EFFORT_LABELS[e]} ${t.helpers.runs[e]}`)
     lines.push(`Helpers: ${helperRuns} subagent${helperRuns === 1 ? '' : 's'} (${per.join(', ')}), ${t.helpers.requests} requests, cost about ${tokens(Math.round(t.helpers.cost))} tokens`)
@@ -2297,7 +2294,7 @@ async function choose($: EngineInterface, next: Pick | null) {
   const before = await read($, pick)
   await Promise.all([update($, pick, () => next), $.store.set('pick', next)])
   // A change Auto made is shown as "Low → High" for a moment, so the switch is seen.
-  if (next && next.by !== 'manual' && before && before.model !== 'haiku' && before.effort !== next.effort) {
+  if (next && next.by !== 'manual' && before && before.effort !== next.effort) {
     const change = { from: before.effort, to: next.effort }
     await update($, switched, () => change)
     $.clock.after(SWITCHED_MS, () => void update($, switched, () => null))
@@ -2330,12 +2327,10 @@ export function settingsSvg(color: string): string {
 
 /** The settings rows' icons, drawn in the cog's outline style (14 px, 1.3 stroke) rather than font glyphs, which
  * differ per font. */
-export function rowIconSvg(kind: 'effort' | 'model' | 'judge' | 'handoff' | 'show' | 'quick' | 'full', color: string, onKnobToo = false): string {
+export function rowIconSvg(kind: 'effort' | 'judge' | 'handoff' | 'show' | 'quick' | 'full', color: string, onKnobToo = false): string {
   const shapes = {
     // A gauge: an open arc with a needle.
     effort: '<path d="M2.6 10.4A5 5 0 1 1 11.4 10.4"/><path d="M7 8.2L9.6 5.2"/><circle cx="7" cy="8.6" r=".9"/>',
-    // Layers: the models, stacked.
-    model: '<path d="M7 2 12.2 4.7 7 7.4 1.8 4.7Z"/><path d="M1.8 7.3 7 10 12.2 7.3"/><path d="M1.8 9.9 7 12.6 12.2 9.9"/>',
     // Scales: a beam on a post, two pans.
     judge: '<path d="M7 2.4V11.6M4.4 11.6H9.6M2.6 4.2H11.4"/><path d="M2.6 4.2L1.2 7.6A1.5 1.5 0 0 0 4 7.6Z"/><path d="M11.4 4.2L10 7.6A1.5 1.5 0 0 0 12.8 7.6Z"/>',
     // An arrow into a bar: hand off.
@@ -2369,12 +2364,10 @@ function kTokens(n: number): string {
 }
 
 async function snap($: EngineInterface) {
-  const [auto, autoModel, current, judging, wanted, shownByApp, modelNow, switchedNow, pausedNow, cacheNow, compacting] = await Promise.all([
+  const [auto, current, judging, shownByApp, modelNow, switchedNow, pausedNow, cacheNow, compacting] = await Promise.all([
     read($, isAuto),
-    read($, isAutoModel),
     read($, pick),
     read($, isJudging),
-    read($, suggestion),
     read($, appEffort),
     read($, model),
     read($, switched),
@@ -2382,7 +2375,7 @@ async function snap($: EngineInterface) {
     read($, cacheLeft),
     read($, isCompacting),
   ])
-  return { auto, autoModel, current, judging, wanted, shownByApp, modelNow, switchedNow, pausedNow, cacheNow, compacting }
+  return { auto, current, judging, shownByApp, modelNow, switchedNow, pausedNow, cacheNow, compacting }
 }
 type Snap = Awaited<ReturnType<typeof snap>>
 
@@ -2391,8 +2384,10 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
   const effortTip = !v.auto
     ? 'Auto is off: the effort stays as you set it. The power button turns Auto on.'
     : v.pausedNow
-      ? 'Auto waits on this model: an effort change would rewrite its prompt cache.'
-      : !effortOf(v, v.modelNow ?? 'sonnet')
+      ? v.modelNow === 'haiku'
+        ? 'This model runs without an effort level, so Auto has nothing to set.'
+        : 'Auto waits on this model: an effort change would rewrite its prompt cache.'
+      : !effortOf(v)
         ? 'This model runs without an effort level, so Auto has nothing to set.'
       : [
           v.current ? `Auto picked ${EFFORT_LABELS[v.current.effort]}${v.current.by !== 'manual' ? ` (${v.current.judgeName ?? v.current.by})` : ''}` : 'Auto picks the effort for each message',
@@ -2409,9 +2404,8 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
   return { effort: effortTip, cache: cacheTip }
 }
 
-/** The effort to show: yours or the judge's, else what the app itself runs with; none on Haiku. */
-function effortOf(v: Snap, inUse: ModelKey): Effort | undefined {
-  if (inUse === 'haiku') return undefined
+/** The effort to show: yours or the judge's, else what the app itself runs with. */
+function effortOf(v: Snap): Effort | undefined {
   if (v.current) return v.current.effort
   return EFFORTS.includes(v.shownByApp as Effort) ? (v.shownByApp as Effort) : undefined
 }
@@ -2449,44 +2443,6 @@ let classicStart: { at: number; said: string } | null = null
 let coldForced = false
 let handoffTimer: { cancel: () => void } | undefined
 const HANDOFF_POLL_MS = 1000
-// The model this prompt's requests run on when the judge picked a cheaper one than the chat's, else null. The chat's
-// own model stays as it is: each request is sent to the cheaper model in turn.step, so the chat model's cache stays warm
-// for the next prompt that needs it.
-let routed: ModelKey | null = null
-// Prompts left that stay on the chat's model, after a cheaper answer was redone.
-let stayUp = 0
-const MODEL_RANK: ModelKey[] = ['haiku', 'sonnet', 'opus', 'fable']
-/** The model a verdict sends this prompt to: a cheaper one than the chat's, or null for the chat's own. Never Fable. */
-export function routeTo(verdict: ModelKey, inUse: ModelKey): ModelKey | null {
-  if (verdict === 'fable') return null
-  return MODEL_RANK.indexOf(verdict) < MODEL_RANK.indexOf(inUse) ? verdict : null
-}
-
-// What one input token costs on each model, in Sonnet's price: Opus about 2x (measured: the same prompt cost 1.97x on Opus), Haiku about a third. These are the ratios
-// the savings estimate uses; they only have to be right enough to tell which side of a switch is cheaper.
-export const MODEL_PRICE: Record<ModelKey, number> = { haiku: 1 / 3, sonnet: 1, opus: 2, fable: 5 }
-/**
- * Whether sending this one prompt to a cheaper model pays. The chat's context is read from the cache (a tenth of the input
- * price) where that model's cache is warm, and written to it (1.25 times) where it is cold. A switch to a cold model
- * writes the whole context first, which can cost more than staying on the chat's own warm one at a low effort.
- */
-export function routeWorth(to: ModelKey, inUse: ModelKey, contextTokens: number, warm: { to: boolean; inUse: boolean }): boolean {
-  if (!(contextTokens > 0)) return true
-  // Claude Code writes the 1-hour cache, which costs twice the input price (measured), not the 5-minute 1.25.
-  const write = 2
-  const stay = contextTokens * MODEL_PRICE[inUse] * (warm.inUse ? WEIGHT.read : write)
-  const move = contextTokens * MODEL_PRICE[to] * (warm.to ? WEIGHT.read : write)
-  return move < stay
-}
-// Until when each model's prompt cache is warm for this chat: set by every main response on it.
-const warmUntil: Partial<Record<ModelKey, number>> = {}
-// On the mod's clock, the same one the cache countdown runs on.
-function markWarm(modelId: string, usage: unknown, now: number) {
-  const key = keyOf(modelId)
-  if (key) warmUntil[key] = now + CACHE_TTL[cacheTtlOf(usage) ?? '5m']
-}
-const isWarm = (key: ModelKey, now: number) => (warmUntil[key] ?? 0) > now
-
 // When Haiku last wrote a compaction (for /effortless debug).
 let lastHaikuCompact = 0
 
@@ -2559,7 +2515,7 @@ type TerminalBand = { key: string; kind: ArtKind; color: string; bg: string; edg
  * row under it, so effort stays in sight while a band shows. */
 async function terminalBand($: EngineInterface, e: RenderInput<'AbovePrompt'>, b: TerminalBand) {
   const { Box, Text } = themedEls($.ui.resolve(e))
-  const { rows } = await effortRows($, e, { auto: !b.autoInBar })
+  const rows = await effortRows($, e, { auto: !b.autoInBar })
   return (
     <Box key={`${b.key}-col`} flexDirection="column">
       <Box key={b.key} flexDirection="row" gap={1} alignItems="center" paddingX={1} backgroundColor={b.bg} borderStyle="round" borderColor={b.edge}>
@@ -3129,7 +3085,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
     autoOnAt = nowMs
   }
   autoSeen = v.auto
-  const effortNow = effortOf(v, v.modelNow ?? (await sessionModel($)))
+  const effortNow = effortOf(v)
   const by = v.current?.by
   const reason = v.current
     ? `${by === 'manual' || by === 'named' ? 'You' : by === 'jev' ? (v.current.judgeName ?? 'Jev') : 'Haiku'}: ${v.current.why}`
@@ -3274,8 +3230,8 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
               word looked cheap: another font, a late start and a jump back to the text. */}
           <Text key="dash-level" color={wordColor} bold>{v.judging && Svg ? 'Deciding' : what}</Text>
           {/* The model this prompt runs on, dim, after the effort: the judge's routing to a cheaper model shows as it happens. */}
-          {!v.judging && v.auto && MODELS.find(m => m.key === (routed ?? v.modelNow)) ? (
-            <Text key="dash-model" color={DASH_DIM}>{` · ${MODELS.find(m => m.key === (routed ?? v.modelNow))!.label}`}</Text>
+          {!v.judging && v.auto && MODELS.find(m => m.key === v.modelNow) ? (
+            <Text key="dash-model" color={DASH_DIM}>{` · ${MODELS.find(m => m.key === v.modelNow)!.label}`}</Text>
           ) : null}
           {/* While the judge decides: the progress bar's thinking dots, as a plain image (its CSS still runs, and a
               redraw does not restart it the way an interactive frame does). */}
@@ -3363,53 +3319,17 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   )
 }
 
-/** The terminal's rows above the prompt (Effort steps, Auto, the model row when switched on) and, on any surface, the
- * judge's question when it suggests another model. The rows also sit under an alert band, so effort never goes away. */
+/** The terminal's rows above the prompt: the Effort steps, Auto and who picked. They also sit under an alert band, so
+ * effort never goes away. */
 async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opts: { auto?: boolean } = {}) {
   const { Box, Text, Button } = themedEls($.ui.resolve(e))
   const v = await snap($)
-  const { auto, autoModel, current, judging, wanted, shownByApp } = v
-  const inUse = v.modelNow ?? (await sessionModel($))
-  const effortNow = effortOf(v, inUse)
-  // The model row is paused: effort first. EFFORTLESS_MODEL_UI=1 brings it back.
-  const showModel = (await envModelUi($)) === '1'
-
+  const { auto, current, judging, shownByApp } = v
+  const effortNow = effortOf(v)
   const setEffort = (level: Effort) => () => pickEffort($, level)
-  // Picking a model yourself turns off Auto for model alone; accepting a suggestion leaves it on.
-  const setModel = (model: ModelKey) => async () => {
-    await update($, isAutoModel, () => false)
-    await $.store.set('isAutoModel', false)
-    await changeModel(model)
-  }
-  // The person sends /model, so the app's own control moves too; with a draft in the box the mod runs it.
-  const changeModel = async (model: ModelKey) => {
-    if (await typeCommand($, `/model ${model}`)) return
-    await switchModel($, model)
-  }
-  const acceptSuggestion = (model: ModelKey) => () => changeModel(model)
-  const toggleAutoModel = async () => {
-    const turnOn = !(await read($, isAutoModel))
-    await update($, isAutoModel, () => turnOn)
-    await $.store.set('isAutoModel', turnOn)
-    if (!turnOn) await update($, suggestion, () => null)
-  }
-  const dismiss = async () => {
-    declined = wanted
-    await update($, suggestion, () => null)
-  }
+  if (e.surface !== 'terminal') return null
 
-  const question = wanted ? (
-    <Box flexDirection="column">
-      <Box flexDirection="row" gap={1} alignItems="center">
-        <Text>Switch to {MODELS.find(m => m.key === wanted)?.label}? The context reloads.</Text>
-        <Button key="accept" variant="primary" label="Switch" onPress={acceptSuggestion(wanted)} />
-        <Button key="decline" label="Keep" onPress={dismiss} />
-      </Box>
-    </Box>
-  ) : null
-  if (e.surface !== 'terminal') return { question, rows: null }
-
-  const notAligned = current && inUse !== 'haiku' && shownByApp && shownByApp !== current.effort
+  const notAligned = current && shownByApp && shownByApp !== current.effort
   const note = judging
     ? 'Deciding…'
     : notAligned
@@ -3419,29 +3339,8 @@ async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opt
         : auto
           ? 'Picks the effort at the next prompt'
           : 'Pick an effort'
-  const modelRow = (
-    <Box flexDirection="row" alignItems="center" gap={1}>
-      {MODELS.map(m =>
-        m.key === inUse ? (
-          <Button key={`m-${m.key}`} variant="primary" label={m.label} onPress={setModel(m.key)} />
-        ) : (
-          <Button key={`m-${m.key}`} plain dimColor label={m.label} onPress={setModel(m.key)} />
-        ),
-      )}
-      <Box flexGrow={1} />
-      <Button
-        key="auto-model"
-        hotkey="m"
-        variant={autoModel ? 'primary' : undefined}
-        label={autoModel ? 'Auto on' : 'Auto off'}
-        onPress={toggleAutoModel}
-      />
-    </Box>
-  )
   const rows = (
     <Box flexDirection="column">
-      {question}
-      {showModel ? modelRow : null}
       <Box flexDirection="row" gap={1} alignItems="center">
         {/* The word never breaks: the note at the end gives way first. */}
         <Box flexShrink={0}>
@@ -3472,7 +3371,7 @@ async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opt
       </Box>
     </Box>
   )
-  return { question, rows }
+  return rows
 }
 
 // --- The agent panel (hooks/agents.tsx): the $ side, kept short ------------------------------------------------------
@@ -3493,11 +3392,12 @@ async function agentCost($: EngineInterface, id: string, cost: number) {
   await agentSet($, id, a => ({ ...a, cost: (a.cost ?? 0) + cost }))
 }
 
-// Effort for helpers: the effort the judge picked for each subagent, by its id. A subagent's first request can come
-// before its spawn resolves with the id (seen 2026-10-10), so a pick waits under the spawn's description and type
-// until a request from an unknown subagent claims it through $.agent.list().
-const helperPicks = new Map<string, Effort>()
-let helperWaiting: { description: string; type: string; parentId?: string; effort: Effort }[] = []
+// Effort for helpers: the judge's verdict for each subagent's task, by its id; each request takes the answer for the
+// model it runs on. A subagent's first request can come before its spawn resolves with the id (seen 2026-10-10), so a
+// verdict waits under the spawn's description and type until a request from an unknown subagent claims it through
+// $.agent.list().
+const helperPicks = new Map<string, Verdict>()
+let helperWaiting: { description: string; type: string; parentId?: string; verdict: Verdict }[] = []
 
 /** What the judge reads for a subagent: its task, said to be one, so it judges the subagent's work. */
 export function helperQuestion(prompt: string, type: string): string {
@@ -3513,18 +3413,26 @@ export function helperFloor(floor: Effort, ceiling: Effort): Effort {
   return EFFORTS[i]
 }
 
-/** The judge's effort for a subagent's task, within the person's slider, Min and Max and save mode; null without a verdict. */
-async function helperEffort($: EngineInterface, prompt: string, type: string): Promise<Pick | null> {
-  const { verdict } = await judge($, helperQuestion(prompt, type), null)
-  if (!verdict || verdict.why === UNSURE) return null
-  const saving = (await read($, saveUntil)) !== null
-  const leaned = tipped(verdict.effort, verdict.sure, config.bias)
-  const effort = capped(bounded(leaned, helperFloor(config.floor, config.ceiling), config.ceiling), saving)
-  return { ...verdict, effort, why: effort !== leaned && EFFORTS.indexOf(leaned) < EFFORTS.indexOf(effort) ? `${verdict.why} (helpers start at medium)` : verdict.why }
+/** The judge's verdict on a subagent's task, or null. Its model is not known yet, so no answer is checked here. */
+async function helperEffort($: EngineInterface, prompt: string, type: string): Promise<Verdict | null> {
+  return (await judge($, helperQuestion(prompt, type), null)).verdict ?? null
 }
 
-/** The effort picked for this subagent, claiming a waiting pick the first time its id is seen. */
-async function helperEffortOf($: EngineInterface, id: string): Promise<Effort | undefined> {
+/** A helper's effort on the model it runs on, within the person's slider, Min and Max and save mode; null when the
+ * verdict has no sure answer for that model (the helper then runs as it would without one). */
+async function helperSettled($: EngineInterface, verdict: Verdict, modelId: string): Promise<{ effort: Effort; why: string } | null> {
+  const key = keyOf(modelId)
+  const answer = key && key !== 'fable' ? verdict.efforts[key] : undefined
+  if (!answer || isUnsure(verdict.by, answer)) return null
+  const saving = (await read($, saveUntil)) !== null
+  const leaned = tipped(answer.effort, answer.sure, config.bias)
+  const effort = capped(bounded(leaned, helperFloor(config.floor, config.ceiling), config.ceiling), saving)
+  const why = verdict.why || sureWords(answer)
+  return { effort, why: effort !== leaned && EFFORTS.indexOf(leaned) < EFFORTS.indexOf(effort) ? `${why} (helpers start at medium)` : why }
+}
+
+/** The verdict for this subagent, claiming a waiting one the first time its id is seen. */
+async function helperEffortOf($: EngineInterface, id: string): Promise<Verdict | undefined> {
   const known = helperPicks.get(id)
   if (known || helperWaiting.length === 0) return known
   const info = (await $.agent.list().catch(() => [])).find(a => a.id === id)
@@ -3532,8 +3440,8 @@ async function helperEffortOf($: EngineInterface, id: string): Promise<Effort | 
   const match = helperWaiting.find(w => w.description === info.description && w.type === info.type && w.parentId === info.parentId)
   if (!match) return undefined
   helperWaiting = helperWaiting.filter(w => w !== match)
-  helperPicks.set(id, match.effort)
-  return match.effort
+  helperPicks.set(id, match.verdict)
+  return match.verdict
 }
 
 /** Counts one request of a helper the judge steered, for /effortless stats. */
@@ -3679,13 +3587,12 @@ export const register: Register = (on, options) => {
     sessionStarted = Date.now()
     // Everything the first draw needs, asked for at once: one after the other they held the start (and with it the
     // band) for a second or more. What the draw does not need runs after, unawaited.
-    const [sid, kept, kff, orKff, storedAuto, storedAutoModel, storedPick, setupDone] = await Promise.all([
+    const [sid, kept, kff, orKff, storedAuto, storedPick, setupDone] = await Promise.all([
       $.session.id().catch(() => '?'),
       $.store.get('savedSettings').catch(() => null),
       $.store.get('keyFromFile').catch(() => null),
       $.store.get('orKeyFromFile').catch(() => null),
       $.store.get('isAuto').catch(() => null),
-      $.store.get('isAutoModel').catch(() => null),
       $.store.get('pick').catch(() => null) as Promise<Pick | null>,
       $.store.get('setupDone').catch(() => null),
     ])
@@ -3701,7 +3608,6 @@ export const register: Register = (on, options) => {
     for (const w of timingWarnings(pluginOptions)) $.ui.toast(`effortless: ${w}`)
     await Promise.all([
       typeof storedAuto === 'boolean' ? update($, isAuto, () => storedAuto) : null,
-      typeof storedAutoModel === 'boolean' ? update($, isAutoModel, () => storedAutoModel) : null,
       // Auto off means the effort you chose should still be the one in force.
       storedAuto === false && storedPick && EFFORTS.includes(storedPick.effort) ? update($, pick, () => storedPick).then(() => { pickCarried = true }) : null,
       // The first time the mod runs, the setup guide opens above the prompt.
@@ -3779,7 +3685,6 @@ export const register: Register = (on, options) => {
   // started; this hook answers it, and the file's text never reaches the model. Both spellings the app may use.
   on('command.run', async ($, e, next) => {
     if (e.command !== 'effortless' && e.command !== 'effortless:effortless') return next(e)
-    const wanted = await read($, suggestion)
     const arg = e.args.trim().toLowerCase()
     if (arg === 'agents' || arg === 'agents demo') {
       if (arg === 'agents demo') {
@@ -3846,11 +3751,11 @@ export const register: Register = (on, options) => {
           `app sent: ${lastRenderProps || 'nothing'}`,
           `settings open: ${await read($, settingsOpen)}`,
           `judge: ${config.judge} · models: ${config.decisionModels.length ? `${config.decisionModels.map(routeLabel).join(' → ')} → Haiku` : 'none'} · last answer: ${lastChainAnswer || 'none yet'}${timingWarnings(pluginOptions).map(w => ` · ${w}`).join('')}`,
+          `last verdict: ${lastVerdictLine || 'none yet'}`,
           `setup step: ${await read($, setupStep)}`,
           `handoff: ${await read($, handoffStage)}`,
           `last fork: ${lastFork ? `${lastFork.outcome}, ${ago(lastFork.at)}` : 'none'}`,
           `hidden: ${config.hide.join(',') || 'nothing'}`,
-          `model: ${config.modelAuto === 'on' ? `cheaper when it can, now ${routed ?? 'the chat\'s'}` : 'always the chat\'s'}`,
           lastRequest
             ? `last request: app asked ${lastRequest.appModel} at ${lastRequest.appEffort ?? 'none'}, sent ${lastRequest.model} at ${lastRequest.effort ?? 'none'}${lastRequest.model === lastRequest.appModel && lastRequest.effort === lastRequest.appEffort ? ' (unchanged)' : ' (changed by effortless)'}, ${ago(lastRequest.at)}`
             : 'last request: none yet',
@@ -3879,14 +3784,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       return { text: 'The cache shows as cold now (a test). Compact is in the footer. The next response restarts the countdown.' }
     }
     if (arg === 'stats' || arg === 'saved') return { text: `Auto, this session:\n${savedText(await read($, saved))}` }
-    if (!wanted) return { text: 'No model suggestion right now.' }
-    if (arg === 'switch') {
-      $.clock.after(0, () => void switchModel($, wanted))
-      return { text: `Switching to ${wanted}. The context reloads.` }
-    }
-    declined = wanted
-    await update($, suggestion, () => null)
-    return { text: `Keeping the current model.` }
+    return { text: 'Try /effortless settings, debug, handoff [full], setup, auto, stats, save, cold, swamp, hot or down.' }
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -3899,25 +3797,24 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     // The handoff check runs for every message the person types, whatever the effort judge is doing (or whether Auto is on).
     if (byPerson && !e.text.trim().startsWith('/') && !isFollowUp(e.text)) void checkHandoff($, e.text).catch(() => undefined)
     const wantsEffort = await read($, isAuto)
-    const wantsModel = await read($, isAutoModel)
     // A typed slash command is judged only when it is a skill or a custom command (what the person added); the app's own
     // (/compact, /clear, /model) and effortless's never are. The judge is told what the command is, since its name alone says little.
     const slash = e.text.trim().startsWith('/')
     const skill = slash && byPerson ? await typedSkill($, e.text) : undefined
-    if (!byPerson || (slash && !skill) || (!wantsEffort && !wantsModel)) return next(e)
+    if (!byPerson || (slash && !skill) || !wantsEffort) return next(e)
     // On a model where an effort change rewrites the cache, Auto waits instead of judging.
     const modelId = await $.session.model()
     await modelIs($, modelId)
-    if (!cacheSafe(modelId) && keyOf(modelId) !== 'haiku') return next(e)
+    if (!cacheSafe(modelId)) return next(e)
     // "go", "ok", "yes" between two steps of work keep the effort Auto already chose; no judge is asked.
     const before = await read($, pick)
     // A message with an image is never a bare follow-up: "fix this" plus a screenshot is new work.
-    // Typed while a turn ran (e.turnId), it often steers that task: the judge is told, so it can keep the effort.
+    // Typed while a turn ran (e.turnId), it often steers that task: the judge is told, and a lower verdict waits (heldPick).
     const midTurn = e.turnId !== undefined && before !== null
     const said = skill ? `${e.text}
 
 [This is a slash command that runs a skill: ${skill.description || skill.name}. Judge the work the skill will do.]` : e.text
-    const shown = midTurn ? withMidTurn(withAttachments(said, e.attachments), before.effort) : withAttachments(said, e.attachments)
+    const shown = midTurn ? withMidTurn(withAttachments(said, e.attachments)) : withAttachments(said, e.attachments)
     if (wantsEffort && before && before.by !== 'manual' && !e.attachments?.length && !slash && isFollowUp(e.text) && keepsEffort(e.text, await recentContext($).catch(() => ''))) {
       await countPrompt($, before.effort, undefined, 0, 0)
       void proof($, `follow-up "${e.text.trim()}": keeping ${before.effort}`)
@@ -3934,8 +3831,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
         heldPick = null
         await choose($, applied)
       }
-      if (!midTurn && routed) routed = null
-      await countPrompt($, inUse !== 'haiku' ? named : undefined, 'named', 0, 0)
+      await countPrompt($, named, 'named', 0, 0)
       void proof($, `named level ${named} in "${e.text.slice(0, 50)}": no judge`)
       $.ui.invalidate('ui.render')
       return next(e)
@@ -3950,76 +3846,39 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     await update($, isJudging, () => true)
     try {
       const inUse = await sessionModel($)
+      // Fable never gets here (Auto pauses on it); the judge answers for the other three.
+      const target = inUse as JudgedModel
       const startedAt = Date.now()
-      const { verdict, tokens: judgeTokens } = await judge($, shown, {
-        model: inUse,
-        effort: (await read($, pick))?.effort ?? 'medium',
-        why: '',
-        by: 'manual',
-      })
+      const { verdict, tokens: judgeTokens } = await judge($, shown, target)
       await endJudgeGlow($, 'verdict')
       const ms = Date.now() - startedAt
-      await countPrompt($, wantsEffort && inUse !== 'haiku' ? verdict?.effort : undefined, verdict?.by, ms, judgeTokens)
-      void proof(
-        $,
-        verdict
-          ? `judged by ${verdict.by} in ${ms} ms: ${verdict.model}/${verdict.effort} (${verdict.why}) for "${e.text.slice(0, 50)}"`
-          : `no verdict after ${ms} ms for "${e.text.slice(0, 50)}"`,
-      )
+      const running = await read($, pick)
+      const answer = verdict?.efforts[target]
+      let applied: Pick | null = null
+      if (verdict && answer && !isUnsure(verdict.by, answer)) {
+        const why = verdict.why || sureWords(answer)
+        applied = { model: inUse, ...(await settledPick($, answer, why)), by: verdict.by, ...(verdict.judgeName ? { judgeName: verdict.judgeName } : {}), ...(answer.sure !== undefined ? { sure: answer.sure } : {}), judged: verdict.efforts }
+      } else if (verdict) {
+        // Unsure even after Haiku's look (or no answer for this model): effortless keeps the effort in force (its pick,
+        // else the app's own), still within Min, Max and save mode.
+        const appNow = await read($, appEffort)
+        const kept = running?.effort ?? (EFFORTS.includes(appNow as Effort) ? (appNow as Effort) : 'medium')
+        const saving = (await read($, saveUntil)) !== null
+        applied = { model: inUse, effort: capped(bounded(kept, config.floor, config.ceiling), saving), why: UNSURE, by: verdict.by, ...(verdict.judgeName ? { judgeName: verdict.judgeName } : {}), judged: verdict.efforts }
+      }
+      lastVerdictLine = verdict ? `${verdict.judgeName ?? verdict.by}: ${answersText(verdict)} -> ${applied?.effort} on ${inUse} (${applied?.why})` : 'no verdict'
+      await countPrompt($, applied?.effort, verdict?.by, ms, judgeTokens)
+      void proof($, `judged in ${ms} ms: ${lastVerdictLine} for "${e.text.slice(0, 50)}"`)
       $.ui.invalidate('ui.render')
-      if (verdict) {
-        // Effort follows the verdict at once, when Auto is on for effort. The model stays: switching it
-        // reloads the context, so with Auto on for model it is only suggested.
-        if (wantsEffort) {
-          const saving = (await read($, saveUntil)) !== null
-          const leaned = bounded(tipped(verdict.effort, verdict.sure, config.bias), config.floor, config.ceiling)
-          const effort = capped(leaned, saving)
-          const why = effort !== leaned ? 'save mode' : leaned !== verdict.effort ? 'your settings' : verdict.why
-          const applied: Pick = { ...verdict, model: inUse, effort, why }
-          // Mid-turn, a lower verdict would cut the running task's effort for its remaining steps: it waits for the
-          // turn to end (the queued message may run as a turn of its own). A higher one helps the task, so it applies.
-          const running = await read($, pick)
-          if (midTurn && running && EFFORTS.indexOf(effort) < EFFORTS.indexOf(running.effort)) {
-            heldPick = applied
-            void proof($, `typed mid-turn: ${effort} waits, the running turn keeps ${running.effort}`)
-          } else {
-            heldPick = null
-            await choose($, applied)
-          }
-        }
-        // A prompt the judge calls simple runs on a cheaper model; a message typed mid-turn leaves the running choice.
-        if (!midTurn) {
-          let to = wantsEffort && config.modelAuto === 'on' ? routeTo(verdict.model, inUse) : null
-          // The last prompt ran on a cheaper model and this one says it was wrong: that is a miss. The retry runs on the
-          // chat's own model, and so do the next few prompts.
-          if (routed && looksLikeRedo(e.text)) {
-            stayUp = REDO_STAY_PROMPTS
-            await update($, saved, old => ({ ...asSpent(old), redone: asSpent(old).redone + 1 }))
-            void proof($, `redo after ${routed}: the next ${REDO_STAY_PROMPTS} prompts stay on ${inUse}`)
-          }
-          if (stayUp > 0) {
-            stayUp--
-            if (to) void proof($, `stays on ${inUse}: a cheaper answer was just redone (${stayUp} more)`)
-            to = null
-          }
-          // A switch to a model whose cache is cold writes the whole chat to it: stay when that costs more than it saves.
-          const now = await $.clock.now().catch(() => Date.now())
-          if (to && !routeWorth(to, inUse, lastContext?.tokens ?? 0, { to: isWarm(to, now), inUse: !(cacheExpires > 0 && now >= cacheExpires) })) {
-            void proof($, `stays on ${inUse}: ${to} has a cold cache, switching would cost more`)
-            to = null
-          }
-          if (to) await update($, saved, old => ({ ...asSpent(old), moved: asSpent(old).moved + 1 }))
-          if (to !== routed) {
-            routed = to
-            void proof($, to ? `this prompt runs on ${to} (the chat is on ${inUse})` : `back on ${inUse}`)
-            $.ui.invalidate('ui.render')
-          }
-        }
-        if (wantsModel && verdict.model !== inUse && verdict.model !== declined) {
-          await update($, suggestion, () => verdict.model)
-          $.ui.toast(`Suggestion: switch to ${verdict.model}? /effortless switch or /effortless keep`)
-        } else if (verdict.model === inUse) {
-          await update($, suggestion, () => null)
+      if (applied) {
+        // Mid-turn, a lower verdict would cut the running task's effort for its remaining steps: it waits for the
+        // turn to end (the queued message may run as a turn of its own). A higher one helps the task, so it applies.
+        if (midTurn && running && EFFORTS.indexOf(applied.effort) < EFFORTS.indexOf(running.effort)) {
+          heldPick = applied
+          void proof($, `typed mid-turn: ${applied.effort} waits, the running turn keeps ${running.effort}`)
+        } else {
+          heldPick = null
+          await choose($, applied)
         }
       }
     } finally {
@@ -4043,9 +3902,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       if (e.agentId === undefined) lastRequest = { index: e.index, appModel: e.model, appEffort: e.effort, model: request.model, effort: request.effort, at: Date.now() }
       const answer = yield* next(request)
       // Inside the hook ($ calls after it returns are refused), and never allowed to break the request.
-      if (e.agentId === undefined && answer?.usage) markWarm(request.model, answer.usage, await $.clock.now().catch(() => Date.now()))
-      // A prompt run on a cheaper model leaves the chat's own cache as it was: only the chat's model restarts the countdown.
-      if (e.agentId === undefined && answer?.usage && request.model === e.model) await cacheTouched($, answer.usage).catch(() => undefined)
+      if (e.agentId === undefined && answer?.usage) await cacheTouched($, answer.usage).catch(() => undefined)
       if (e.agentId === undefined && answer?.usage) turnCost += weighted(answer.usage)
       if (e.agentId !== undefined && answer?.usage) await agentCost($, e.agentId, weighted(answer.usage)).catch(() => undefined)
       return answer
@@ -4075,7 +3932,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     // The full handoff's turn: the chat's own model at medium, whatever the last prompt was judged, Auto on or off. Not
     // on a model where an effort change rewrites the cache: on a big chat that costs more than medium saves.
     if (e.agentId === undefined && handoffEffort) {
-      if (typeof e.effort !== 'string' || keyOf(e.model) === 'haiku') return yield* send(e)
+      if (typeof e.effort !== 'string') return yield* send(e)
       if (!cacheSafe(e.model)) {
         if (e.index === 0) void proof($, `full handoff: stays at ${e.effort}, an effort change on ${e.model} rewrites the cache`)
         return yield* send(e)
@@ -4083,19 +3940,11 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       if (e.index === 0) void proof($, `full handoff: request ${e.index} (${e.model}) at ${handoffEffort}, was ${e.effort}`)
       return yield* send({ ...e, effort: handoffEffort })
     }
-    // The judge put this prompt on a cheaper model: each of its requests goes there, at the picked effort.
-    if (e.agentId === undefined && routed && (await read($, isAuto))) {
-      const to = MODELS.find(m => m.key === routed)!.id
-      const picked = await read($, pick)
-      const effort = picked?.effort ?? e.effort
-      void proof($, `request ${e.index}: ${e.model} -> ${to} at ${effort}`)
-      const result = yield* send({ ...e, model: to, effort })
-      if (picked && picked.by !== 'manual' && result.usage) await tally($, picked.effort, result.usage)
-      return result
-    }
-    // A helper the judge picked an effort for at its spawn runs every request at it. Haiku takes no effort.
-    if (e.agentId !== undefined && config.helpers === 'on' && typeof e.effort === 'string' && keyOf(e.model) !== 'haiku') {
-      const effort = await helperEffortOf($, e.agentId)
+    // A helper the judge read at its spawn runs every request at the answer for the model it runs on. A model that takes no
+    // effort (Haiku 4.5) sends none.
+    if (e.agentId !== undefined && config.helpers === 'on' && typeof e.effort === 'string') {
+      const verdict = await helperEffortOf($, e.agentId)
+      const effort = verdict ? (await helperSettled($, verdict, e.model))?.effort : undefined
       if (effort) {
         if (e.index === 0) void proof($, `helper ${e.agentId} request 0 (${e.model}): effort ${e.effort} -> ${effort}`)
         const result = yield* send({ ...e, effort })
@@ -4104,16 +3953,18 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       }
     }
     const p = await read($, pick)
-    // Haiku takes no effort: decided by the model this request names, never by a stored pick.
-    if (!p || keyOf(e.model) === 'haiku' || !cacheSafe(e.model)) return yield* send(e)
+    // Only where an effort change keeps the cache: decided by the model this request names, never by a stored pick.
+    if (!p || !cacheSafe(e.model)) return yield* send(e)
     // Auto off: the app's own effort goes out. A pick the judge made while Auto was on is not the person's choice, and
     // with the app already on the effort they want, the mod would never see a change to give way to.
     if (p.by !== 'manual' && !(await read($, isAuto))) return yield* send(e)
-    // A subagent of a turn Auto picked for (Helpers off, or no verdict for it) runs at that turn's effort, no extra
-    // judge call, but never below medium: a helper's answer goes back unchecked (see helperFloor). A subagent whose
-    // definition sets its own effort cannot be told apart from one that inherits it, so it follows the turn too.
+    // A subagent of a turn Auto picked for (Helpers off, or no answer for it) runs as Claude Code runs it: on the chat's
+    // model at the chat's effort, here the turn's, no extra judge call, but never below medium: a helper's answer goes
+    // back unchecked (see helperFloor). On another model Claude Code's own effort stands (its definition's, or that
+    // model's default). A subagent whose definition sets its own effort cannot be told apart from one that inherits it,
+    // so on the chat's model it follows the turn too.
     if (e.agentId !== undefined) {
-      if (p.by === 'manual') return yield* send(e)
+      if (p.by === 'manual' || keyOf(e.model) !== p.model) return yield* send(e)
       const floor = helperFloor(config.floor, config.ceiling)
       const effort = EFFORTS.indexOf(p.effort) < EFFORTS.indexOf(floor) ? floor : p.effort
       if (e.index === 0) void proof($, `subagent ${e.agentId} (${e.model}): effort ${e.effort ?? 'none'} -> ${effort}, the turn's`)
@@ -4144,7 +3995,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     const v = await snap($)
     const handoffNow = (await read($, handoffStage)) !== null
     const needsSetup = await read($, setupPending)
-    const effortNow = effortOf(v, v.modelNow ?? 'sonnet')
+    const effortNow = effortOf(v)
     // Save mode paints the level in the running-hot band's ember until the limit resets.
     const saving = (await read($, saveUntil)) !== null
     const label = v.judging
@@ -4240,27 +4091,30 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     const helper = config.helpers === 'on' && !e.fork && !e.isTeammate && !e.workflow
       ? await helperEffort($, e.prompt, e.subagentType).catch(() => null)
       : null
-    const waiting = helper ? { description: e.description, type: e.subagentType, parentId: e.parentAgentId, effort: helper.effort } : null
+    const waiting = helper ? { description: e.description, type: e.subagentType, parentId: e.parentAgentId, verdict: helper } : null
     if (waiting) helperWaiting = [...helperWaiting, waiting].slice(-20)
     const result = await next(e)
+    // Now its model is known: the effort it runs at, for the pane and the stats.
+    const runsOn = ('model' in result && result.model) || e.model || e.parentModel
+    const settled = helper && 'agentId' in result && result.agentId && runsOn ? await helperSettled($, helper, runsOn) : null
     if (waiting) {
       helperWaiting = helperWaiting.filter(w => w !== waiting)
-      if ('agentId' in result && result.agentId && !helperPicks.has(result.agentId)) helperPicks.set(result.agentId, waiting.effort)
-      if ('agentId' in result && result.agentId) {
+      if ('agentId' in result && result.agentId && !helperPicks.has(result.agentId)) helperPicks.set(result.agentId, waiting.verdict)
+      void proof($, `helper ${e.subagentType} "${e.description}": ${answersText(waiting.verdict)}${settled ? ` -> ${settled.effort} (${settled.why})` : ', none applies'}`)
+      if (settled) {
         await update($, saved, old => {
           const t = asSpent(old)
-          return { ...t, helpers: { ...t.helpers, runs: { ...t.helpers.runs, [waiting.effort]: (t.helpers.runs[waiting.effort] ?? 0) + 1 } } }
+          return { ...t, helpers: { ...t.helpers, runs: { ...t.helpers.runs, [settled.effort]: (t.helpers.runs[settled.effort] ?? 0) + 1 } } }
         }).catch(() => undefined)
-        void proof($, `helper ${e.subagentType} "${e.description}": ${waiting.effort} (${helper?.why})`)
       }
     }
     if (e.isTeammate || e.workflow || !('agentId' in result) || !result.agentId) return result
     const id = result.agentId
     const now = await $.clock.now()
     const rec: AgentRec = { id, type: e.fork ? 'fork' : e.subagentType, task: e.description, state: 'running', startedAt: now, model: result.model }
-    if (helper) {
-      rec.effort = EFFORT_LABELS[helper.effort]
-      rec.why = helper.why
+    if (settled) {
+      rec.effort = EFFORT_LABELS[settled.effort]
+      rec.why = settled.why
     }
     if (e.parentAgentId) rec.parentId = e.parentAgentId
     await update($, agentsState, list => [...list.filter(a => a.id !== id), rec].slice(-40))
@@ -4324,7 +4178,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     if (config.hide.includes('line')) return next(e)
     const { Box, Text } = themedEls($.ui.resolve(e))
     const v = await snap($)
-    const effortNow = effortOf(v, v.modelNow ?? 'sonnet')
+    const effortNow = effortOf(v)
     const took = Math.max(1, Math.round(e.props.durationMs / 1000))
     return (
       <Box key="turn-line" flexDirection="row" gap={1}>
@@ -4414,7 +4268,6 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
         layout: draft.layout ?? config.layout,
         compactWith: draft.compactWith ?? config.compactWith,
         handoffButton: draft.handoffButton ?? config.handoffButton,
-        modelAuto: draft.modelAuto ?? config.modelAuto,
         helpers: draft.helpers ?? config.helpers,
         theme: draft.theme ?? config.theme,
         appearance: draft.appearance ?? config.appearance,
@@ -4447,7 +4300,6 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
         : hasKey || shown.judge === 'jev' ? 'Haiku + Jev' : 'Haiku'
       const summaries: Record<SettingsCard, string> = {
         effort: `${BIAS_WORDS[shown.bias + 2]} · ${shown.floor} to ${shown.ceiling}${shown.helpers === 'on' ? ' · helpers' : ''}`,
-        model: shown.modelAuto === 'on' ? 'Cheaper when it can' : "Always the chat's",
         judge: tested && tested.ok !== null ? `${judgeName} · ${tested.ok ? 'working' : 'failing'}` : judgeName,
         models: chain.map(routeLabel).join(' → ') || 'None',
         handoff: `${shown.handoffSkill ? `/${shown.handoffSkill}` : 'Built in'} · compact alert at ${shown.swampAt}%`,
@@ -4759,23 +4611,13 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
             ...(tested && tested.ok !== null
               ? [<Text key="settings-judge-result" color={tested.ok ? '#7fd49b' : '#ff8a80'} wrap="truncate">{`${tested.ok ? '✓' : '✗'} ${tested.text}`}</Text>]
               : []),
-]) : card === 'model' ? (bare ? [] : MODEL_CHOICES.map(c => (
-            <Box key={`model-${c.value}`} flexDirection="column" flexGrow={1} flexShrink={1} minWidth={26}>
-              <Box flexDirection="row" gap={1} alignItems="center">
-                <Button key={`settings-model-${c.value}`} plain label={`${shown.modelAuto === c.value ? '◉' : '○'} ${c.label}`} onPress={() => set('modelAuto')(c.value)} />
-                {/* A warning in the cache countdown's yellow: this choice rarely pays. */}
-                {c.tag ? <Text key={`model-tag-${c.value}`} color={YELLOW} bold>{`⚠ ${c.tag}`}</Text> : null}
-              </Box>
-              <Text dimColor wrap="wrap">{c.about}</Text>
-            </Box>
-          )).concat([
-            // Which model writes a compaction's summary: a model choice, so it sits with the others.
-            pick({ key: "settings-compact-with", label: "Compact with", value: shown.compactWith, options: [{ value: 'haiku', label: 'Haiku 5.5' }, { value: 'session', label: "Chat's model" }], onSelect: set('compactWith') }),
-          ])) : card === 'handoff' ? (bare ? [] : [
+]) : card === 'handoff' ? (bare ? [] : [
             pick({ key: "settings-skill", label: "Handoff skill", value: shown.handoffSkill || '-', options: [
                 { value: '-', label: 'effortless (built in)' },
                 ...[...new Set([...(shown.handoffSkill ? [shown.handoffSkill] : []), ...skillNames])].map(name => ({ value: name, label: `/${name}` })),
               ], onSelect: v => set('handoffSkill')(v === '-' ? '' : v) }),
+            // Which model writes a compaction's summary.
+            pick({ key: "settings-compact-with", label: "Compact with", value: shown.compactWith, options: [{ value: 'haiku', label: 'Haiku 5.5' }, { value: 'session', label: "Chat's model" }], onSelect: set('compactWith') }),
             pick({ key: "settings-swamp", label: "Compact alert at", value: shown.swampAt, options: SWAMP_STEPS.map(n => ({ value: String(n), label: `${n}%` })), onSelect: set('swampAt') }),
             pick({ key: "settings-handoff-button", label: "Handoff button", value: shown.handoffButton, options: [{ value: 'advised', label: 'When advised' }, { value: 'always', label: 'Always' }], onSelect: set('handoffButton') }),
             ...alertToggles,
@@ -5364,21 +5206,11 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     }
     // At rest: the dashboard, unless the person picked the minimal look (the footer's buttons, no band).
     if (config.layout === 'default') {
-      if (e.surface === 'terminal') return dashboardBand($, e)
-      const { question } = await effortRows($, e)
-      const dash = await dashboardBand($, e)
-      return question ? (
-        <Box key="dash-col" flexDirection="column">
-          {question}
-          {dash}
-        </Box>
-      ) : dash
+      return dashboardBand($, e)
     }
     // The minimal look draws no dashboard: mark the rest here, so the next band plays its entrance.
     introKind = 'rest'
-    const { question, rows } = await effortRows($, e)
-    if (e.surface !== 'terminal') return question ?? next(e)
-    return rows
+    return (await effortRows($, e)) ?? next(e)
     } catch (error) {
       lastRenderError = (error instanceof Error ? error.message : String(error)).slice(0, 300)
       return next(e)

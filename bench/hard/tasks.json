@@ -11,25 +11,6 @@
     ]
   },
   {
-    "id": "b2",
-    "difficulty": "easy",
-    "file": "hooks/register.tsx",
-    "find": "if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0)",
-    "replace": "if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) < (pb[i] ?? 0)",
-    "report": "The update check is backwards. When a newer version is out, Check for updates says I'm up to date and no update card shows up. But when the published version is older than the one I have installed, it offers me that older one as an update.",
-    "fails": [
-      "updates > versions compare by number and releases.json gives its newest entry",
-      "updates > Check for updates in Settings looks now, past a Later, and offers the install in the same place",
-      "updates > a version found earlier is not offered once the installed one is as new",
-      "updates > Check for updates trusts git over a web answer that lags behind",
-      "updates > Check for updates looks again while an earlier Updated card is still up",
-      "updates > a newer version is offered; ✕ puts it away for a day, then it is offered again",
-      "updates > Update runs the two claude plugin commands, reloads, and the new version says Updated with a link",
-      "updates > a failed update says why and offers to try again",
-      "updates > the update reaches GitHub over HTTPS, so users without an SSH key there can update"
-    ]
-  },
-  {
     "id": "b3",
     "difficulty": "easy",
     "file": "hooks/register.tsx",
@@ -75,18 +56,6 @@
     ]
   },
   {
-    "id": "b7",
-    "difficulty": "medium",
-    "file": "hooks/register.tsx",
-    "find": "(?! +(problem|worries|thanks|thank|need|rush|hurry))",
-    "replace": "(?! +(worries|thanks|thank|need|rush|hurry))",
-    "report": "When I reply \"no problem\" (say after Claude apologizes), effortless treats it as if I said the last answer was wrong: with model Auto on, the next few prompts stay on the bigger model as for a redo, and stats count it as redone. \"no worries\" and \"no thanks\" don't do this.",
-    "fails": [
-      "dashboard > looksLikeRedo: a correction after a cheaper answer, not a thank-you or a new task",
-      "dashboard > a thank-you after a cheaper answer is not a redo"
-    ]
-  },
-  {
     "id": "b8",
     "difficulty": "hard",
     "file": "hooks/register.tsx",
@@ -95,18 +64,6 @@
     "report": "I set Max effort to low. The main chat respects it, but with Helpers on, subagents still run at medium. Nothing should go above my Max.",
     "fails": [
       "agent panel > helperFloor: medium, the person's Min when higher, never above their Max"
-    ]
-  },
-  {
-    "id": "b9",
-    "difficulty": "hard",
-    "file": "hooks/register.tsx",
-    "find": "const stay = contextTokens * MODEL_PRICE[inUse] * (warm.inUse ? WEIGHT.read : write)",
-    "replace": "const stay = contextTokens * MODEL_PRICE[inUse] * (warm.to ? WEIGHT.read : write)",
-    "report": "With model Auto on, effortless moves prompts to a cheaper model even when that model's prompt cache is cold and the chat is big, while my main model's cache is still warm. That writes the whole chat into the cold cache and costs more than staying would. It should only switch when the switch comes out cheaper.",
-    "fails": [
-      "auto > routeWorth: a switch to a cold model pays only when it still comes out cheaper",
-      "dashboard > cache-aware routing, live through the hooks: a cold Sonnet is skipped on a big warm Opus chat, Haiku moves, a cold chat moves, and a routed reply leaves the countdown alone"
     ]
   },
   {

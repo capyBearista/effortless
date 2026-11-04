@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, judgeFailure, contextFrom, readConfig, timingWarnings, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, judgeFailure, contextFrom, readConfig, timingWarnings, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { hopTimeout, MAX_ROUTES, movedEarlier, parseDecisionModels, routeLabel, routeShortName, withoutRoute, withRoute } from '../hooks/decisions'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
@@ -32,12 +32,25 @@ const BAND = {
 
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 
-/** A TypeSafe System One reply: Jev's choice for effort and model, sure as given. */
-const jevReply = (effort: string, sure = 0.9, model = 'opus') =>
+type Judged3 = 'haiku' | 'sonnet' | 'opus'
+/** A decision model's reply: its effort for each model (one level for all, or per model), sure as given. */
+const jevReply = (effort: string | Partial<Record<Judged3, string>>, sure: number | Partial<Record<Judged3, number>> = 0.9) =>
   JSON.stringify({
-    answers: { effort: { choice: effort, confidence: sure }, model: { choice: model, confidence: 0.8 } },
+    answers: Object.fromEntries(
+      (['haiku', 'sonnet', 'opus'] as const)
+        .map(m => [m, typeof effort === 'string' ? effort : effort[m], typeof sure === 'number' ? sure : (sure[m] ?? 0.9)] as const)
+        .filter(([, choice]) => choice)
+        .map(([m, choice, confidence]) => [`effort_${m}`, { choice, confidence }]),
+    ),
     usage: { input_tokens: 480, output_tokens: 54 },
   })
+
+/** One request of the main loop on this model, the engine sending `effort`; what went out is in recordSteps. */
+async function stepOn($: Engine, model: string, effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' = 'medium', agentId?: string) {
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model, effort, messageCount: 1, ...(agentId ? { agentId } : {}) } as never)) {
+    // drain
+  }
+}
 
 /** Haiku as the judge answers this reply, and counts how often it was asked. */
 function judgeSays(on: On, text: string) {
@@ -52,7 +65,7 @@ function judgeSays(on: On, text: string) {
 /** What sits beneath the plugins in a session: the prompt goes through, the status line takes text. */
 function engine(on: On, env: Record<string, string> = {}, sessionModel = 'claude-opus-5-5', said: { role: string; text: string }[] = []) {
   mock.store(on)
-  mock.env(on, { EFFORTLESS_MODEL_UI: '1', ...env })
+  mock.env(on, env)
   on('prompt.submit', (_$, e) => ({ text: e.text }))
   on('ui.status', () => ({ value: undefined }))
   on('session.messages', () => ({ value: said }) as never)
@@ -138,9 +151,9 @@ async function clickable(ui: { drawn: () => Promise<unknown> }, layer: string) {
 }
 
 describe('auto', () => {
-  test('with the cheaper model off, effort follows the judge and the model stays the one in use', { options: { modelAuto: 'off' } } as never, async ($, on) => {
+  test('effort follows the judge and the model stays the one in use', async ($, on) => {
     engine(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"simple question"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"simple question"}')
     const sent = recordSteps(on)
 
     await $.prompt.submit({ text: 'vad heter mappen?', wait: false, origin: { kind: 'composer' } })
@@ -151,7 +164,7 @@ describe('auto', () => {
 
   test('Auto switched off: the app effort goes out, not the pick the judge made while Auto was on', async ($, on) => {
     engine(on)
-    on('model.complete', () => ({ value: { isAnswered: true as const, text: '{"model":"opus","effort":"low","why":"tiny"}', usage: USAGE } }))
+    on('model.complete', () => ({ value: { isAnswered: true as const, text: '{"haiku":"low","sonnet":"low","opus":"low","why":"tiny"}', usage: USAGE } }))
     const sent = recordSteps(on)
     await $.prompt.submit({ text: 'rename this one variable for me', wait: false, origin: { kind: 'composer' } })
     await step($, 'xhigh')
@@ -165,40 +178,12 @@ describe('auto', () => {
     expect(sent[2].effort).toBe('xhigh')
   })
 
-  test('routeWorth: a switch to a cold model pays only when it still comes out cheaper', () => {
-    const big = 100_000
-    // Opus chat, cache warm: a cold Sonnet writes the whole chat and costs more; a warm Sonnet is far cheaper.
-    expect(routeWorth('sonnet', 'opus', big, { to: false, inUse: true })).toBe(false)
-    expect(routeWorth('sonnet', 'opus', big, { to: true, inUse: true })).toBe(true)
-    // A cold Haiku writes the whole chat (a third of the price, 1.25 times) against a warm Opus read (twice the price, a tenth): still more.
-    expect(routeWorth('haiku', 'opus', big, { to: false, inUse: true })).toBe(false)
-    expect(routeWorth('haiku', 'opus', big, { to: true, inUse: true })).toBe(true)
-    // The chat's own cache gone cold: staying would write it all again on Opus, so Sonnet wins even cold.
-    expect(routeWorth('sonnet', 'opus', big, { to: false, inUse: false })).toBe(true)
-    // No context size known: route as before.
-    expect(routeWorth('sonnet', 'opus', 0, { to: false, inUse: true })).toBe(true)
-  })
-
-  test('a prompt the judge calls simple runs on Haiku 5.5; the next hard one is back on the chat model', { options: { modelAuto: 'on' } } as never, async ($, on) => {
-    engine(on)
-    let verdict = '{"model":"haiku","effort":"low","why":"simple question"}'
-    on('model.complete', () => ({ value: { isAnswered: true as const, text: verdict, usage: USAGE } }))
-    const sent = recordSteps(on)
-    await $.prompt.submit({ text: 'vad heter mappen?', wait: false, origin: { kind: 'composer' } })
-    await step($)
-    expect(sent[0]).toEqual({ model: 'claude-haiku-5-5', effort: 'low' })
-    verdict = '{"model":"opus","effort":"high","why":"big refactor"}'
-    await $.prompt.submit({ text: 'refactor the whole auth layer', wait: false, origin: { kind: 'composer' } })
-    await step($)
-    expect(sent[1]).toEqual({ model: 'claude-opus-5-5', effort: 'high' })
-  })
-
-  test('a typed skill is judged like a prompt (told what it is); the app\'s own commands are not', { options: { modelAuto: 'on' } } as never, async ($, on) => {
+  test('a typed skill is judged like a prompt (told what it is); the app\'s own commands are not', async ($, on) => {
     engine(on)
     const asked: string[] = []
     on('model.complete', (_$, e) => {
       asked.push(String((e as { prompt?: string }).prompt ?? ''))
-      return { value: { isAnswered: true as const, text: '{"model":"haiku","effort":"low","why":"small job"}', usage: USAGE } }
+      return { value: { isAnswered: true as const, text: '{"haiku":"low","sonnet":"low","opus":"low","why":"small job"}', usage: USAGE } }
     })
     const sent = recordSteps(on)
     // /session-handoff is a user skill (see engine's command list): judged, even though it is short enough to look like a follow-up.
@@ -206,7 +191,7 @@ describe('auto', () => {
     await step($)
     expect(asked.length).toBe(1)
     expect(asked[0]).toContain('slash command that runs a skill')
-    expect(sent[0].model).toBe('claude-haiku-5-5')
+    expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'low' })
     // /model is the app's own: never judged.
     await $.prompt.submit({ text: '/model', wait: false, origin: { kind: 'composer' } })
     expect(asked.length).toBe(1)
@@ -214,7 +199,7 @@ describe('auto', () => {
 
   test('the judge never moves a prompt to a dearer model than the chat model, nor to Fable', async ($, on) => {
     engine(on, {}, 'claude-sonnet-5-5')
-    judgeSays(on, '{"model":"opus","effort":"high","why":"hard"}')
+    judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"hard"}')
     const sent = recordSteps(on)
     await $.prompt.submit({ text: 'debug this race condition', wait: false, origin: { kind: 'composer' } })
     for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'high', messageCount: 1 })) {
@@ -237,7 +222,7 @@ describe('auto', () => {
   test('Jev on TypeSafe decides when TYPESAFE_API_KEY is set, with typed questions, and Haiku is not asked', async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const calls: { url: string; auth?: string; body: Record<string, any> }[] = []
     on('http.fetch', (_$, e) => {
       calls.push({
@@ -257,8 +242,8 @@ describe('auto', () => {
     expect(calls[0].auth).toBe('Bearer k')
     expect(calls[0].body.model).toBe('jev-latest')
     expect(calls[0].body.state.next_message).toBe('designa om hela relayn')
-    expect(calls[0].body.questions.effort.type).toBe('choice')
-    expect(Object.keys(calls[0].body.questions.effort.criteria)).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+    expect(calls[0].body.questions.effort_opus.type).toBe('choice')
+    expect(Object.keys(calls[0].body.questions.effort_opus.criteria)).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
     expect(asked.length).toBe(0)
     expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'max' })
   })
@@ -266,7 +251,7 @@ describe('auto', () => {
   test('with the jev judge picked, the TypeSafe key is read from ~/.config/jev/.env when the environment has none', { options: { judge: 'jev' } } as never, async ($, on) => {
     engine(on, { USERPROFILE: '/Users/x' })
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const read: string[] = []
     on('fs.read', (_$, e) => {
       read.push(e.path)
@@ -285,7 +270,7 @@ describe('auto', () => {
 
   test('slash commands are not judged', async ($, on) => {
     engine(on)
-    const asked = judgeSays(on, '{"model":"opus","effort":"max","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"max","sonnet":"max","opus":"max","why":"x"}')
 
     await $.prompt.submit({ text: '/clear', wait: false, origin: { kind: 'composer' } })
 
@@ -296,7 +281,7 @@ describe('auto', () => {
 describe('manual effort', () => {
   test("the app's own Effort control wins over Auto and turns it off", async ($, on) => {
     engine(on)
-    judgeSays(on, '{"model":"opus","effort":"high","why":"hard"}')
+    judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"hard"}')
     const sent = recordSteps(on)
     const drain = async (index: number, effort: 'low' | 'medium' | 'high') => {
       for await (const _ of $.turn.step({ turnId: 't1', index, model: 'claude-opus-5-5', effort, messageCount: 1 })) {
@@ -321,9 +306,9 @@ describe('manual effort', () => {
 })
 
 describe('model in use', () => {
-  test('a switch in the app moves the band, and effort applies to the new model at once', { options: { modelAuto: 'off' } } as never, async ($, on) => {
+  test('after a switch in the app, effort applies to the new model at once', async ($, on) => {
     engine(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"kort"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"kort"}')
     const sent = recordSteps(on)
     mock.clock(on)
     on('classic.PostModelSwitch', () => ({}) as never)
@@ -332,59 +317,12 @@ describe('model in use', () => {
 
     await switchTo('claude-opus-5-5', 'claude-haiku-5-5')
     await $.prompt.submit({ text: 'ok', wait: false, origin: { kind: 'composer' } })
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    await ui.redraw()
-    expect((await ui.find({ key: 'm-haiku' }))?.text).toContain('Haiku')
 
     // The person picks Opus in the app.
     await switchTo('claude-haiku-5-5', 'claude-opus-5-5')
-    await ui.redraw()
-    expect((await ui.find({ key: 'm-opus' }))?.text).toContain('Opus')
 
     await step($, 'medium')
     expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'low' })
-    await ui.unmount()
-  })
-})
-
-describe('two autos', () => {
-  test('Auto for model starts off: effort follows the judge and no model is suggested', async ($, on) => {
-    engine(on)
-    judgeSays(on, '{"model":"sonnet","effort":"low","why":"simple"}')
-    const ran = recordCommands(on)
-    const sent = recordSteps(on)
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    expect((await ui.find({ key: 'auto' }))?.text).toContain('Auto on')
-    expect((await ui.find({ key: 'auto-model' }))?.text).toContain('Auto off')
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    await ui.redraw()
-    expect(await ui.find({ key: 'accept' })).toBeUndefined()
-
-    await step($, 'medium')
-    expect(sent[0].effort).toBe('low')
-    expect(ran).toEqual([])
-    await ui.unmount()
-  })
-
-  test('Auto for effort off: the judge may still suggest a model, effort is left alone', async ($, on) => {
-    engine(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"simple"}')
-    const ran = recordCommands(on)
-    const mocked = mock.clock(on)
-    on('turn.complete', () => ({ text: '' }))
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    await ui.press({ key: 'auto' })
-    await ui.press({ key: 'auto-model' })
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    await ui.redraw()
-    expect(await ui.find({ key: 'accept' })).toBeDefined()
-
-    await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'completed' } as never)
-    await mocked.advance(10)
-    expect(ran).toEqual([])
-    await ui.unmount()
   })
 })
 
@@ -398,32 +336,6 @@ describe('typed commands', () => {
     })
     return filled
   }
-
-  test('a model click types /model into an empty box for you to send', async ($, on) => {
-    engine(on)
-    const filled = box(on, '')
-    const ran = recordCommands(on)
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-
-    await ui.press({ key: 'm-haiku' })
-
-    expect(filled).toEqual(['/model haiku'])
-    expect(ran).toEqual([])
-    await ui.unmount()
-  })
-
-  test('with a draft in the box nothing is overwritten and the mod runs the model switch itself', async ($, on) => {
-    engine(on)
-    const filled = box(on, 'ett halvskrivet meddelande')
-    const ran = recordCommands(on)
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-
-    await ui.press({ key: 'm-haiku' })
-
-    expect(filled).toEqual([])
-    expect(ran).toEqual(['/model haiku'])
-    await ui.unmount()
-  })
 
   test('an effort click sets the effort at once and also types /effort for the app', async ($, on) => {
     engine(on)
@@ -481,7 +393,7 @@ describe('footer text', () => {
 
   test('with Auto on it is the effort in use, in purple', async ($, on) => {
     engine(on)
-    judgeSays(on, '{"model":"sonnet","effort":"high","why":"hard"}')
+    judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"hard"}')
     const footer = await $.ui.mount(FOOTER)
     await $.prompt.submit({ text: 'hard task', wait: false, origin: { kind: 'composer' } })
     const text = await drawn(footer)
@@ -492,7 +404,7 @@ describe('footer text', () => {
 
   test('the small button switches Auto off ("Off", dim, not purple) and on again', async ($, on) => {
     engine(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"high","why":"hard"}')
+    const asked = judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"hard"}')
     const footer = await $.ui.mount(FOOTER)
     await $.prompt.submit({ text: 'hard task', wait: false, origin: { kind: 'composer' } })
     expect(await drawn(footer)).toContain('"children":[" High "]')
@@ -515,7 +427,7 @@ describe('footer text', () => {
 
   test("the app's own Effort control turns Auto off and the footer says Off", async ($, on) => {
     engine(on)
-    judgeSays(on, '{"model":"sonnet","effort":"high","why":"hard"}')
+    judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"hard"}')
     recordSteps(on)
     const footer = await $.ui.mount(FOOTER)
     await $.prompt.submit({ text: 'hard task', wait: false, origin: { kind: 'composer' } })
@@ -528,9 +440,10 @@ describe('footer text', () => {
     await footer.unmount()
   })
 
-  test('on Haiku there is no effort to name', async ($, on) => {
+  test('on Haiku 5.5 the effort is named and applied: the Haiku answer', async ($, on) => {
     engine(on, {}, 'claude-haiku-5-5')
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"simple"}')
+    judgeSays(on, '{"haiku":"high","sonnet":"low","opus":"low","why":"simple"}')
+    const sent = recordSteps(on)
     mock.clock(on)
     on('classic.PostModelSwitch', () => ({}) as never)
     const footer = await $.ui.mount(FOOTER)
@@ -542,8 +455,17 @@ describe('footer text', () => {
       context_tokens: 0,
     } as never)
     await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    expect(await drawn(footer)).not.toContain('Low')
+    expect(await drawn(footer)).toContain('High')
+    await stepOn($, 'claude-haiku-5-5')
+    expect(sent[0]).toEqual({ model: 'claude-haiku-5-5', effort: 'high' })
     await footer.unmount()
+  })
+
+  test('on Haiku 4.5, which takes no effort, Auto pauses and the judge is not asked', async ($, on) => {
+    engine(on, {}, 'claude-haiku-4-5')
+    const asked = judgeSays(on, '{"haiku":"high","sonnet":"low","opus":"low","why":"simple"}')
+    await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
+    expect(asked.length).toBe(0)
   })
 
   test('the judge is told that scope counts: a short message can be a big job', async ($, on) => {
@@ -551,10 +473,10 @@ describe('footer text', () => {
     let system = ''
     on('model.complete', (_$, e) => {
       system = String(e.system)
-      return { value: { isAnswered: true as const, text: '{"model":"opus","effort":"high","why":"stor uppgift"}', usage: USAGE } } as never
+      return { value: { isAnswered: true as const, text: '{"haiku":"high","sonnet":"high","opus":"high","why":"stor uppgift"}', usage: USAGE } } as never
     })
     await $.prompt.submit({ text: 'go through my whole google drive and clean it up', wait: false, origin: { kind: 'composer' } })
-    expect(system).toContain('SCOPE')
+    expect(system).toContain('Judge the scope')
     expect(system).toContain('whole drive')
     expect(system).toContain('never low')
   })
@@ -565,7 +487,7 @@ describe('footer text', () => {
     // The judge takes half a second to answer.
     on('model.complete', async () => {
       await mocked.sleep(500)
-      return { value: { isAnswered: true as const, text: '{"model":"sonnet","effort":"high","why":"x"}', usage: USAGE } } as never
+      return { value: { isAnswered: true as const, text: '{"haiku":"high","sonnet":"high","opus":"high","why":"x"}', usage: USAGE } } as never
     })
     const footer = await $.ui.mount(FOOTER)
     expect(await drawn(footer)).not.toContain('Deciding')
@@ -584,7 +506,7 @@ describe('footer text', () => {
   test('a switch is shown as Low → High for a moment, then only the level', async ($, on) => {
     engine(on)
     const mocked = mock.clock(on)
-    let verdict = '{"model":"sonnet","effort":"low","why":"simple"}'
+    let verdict = '{"haiku":"low","sonnet":"low","opus":"low","why":"simple"}'
     on('model.complete', () => ({ value: { isAnswered: true as const, text: verdict, usage: USAGE } }) as never)
     const footer = await $.ui.mount(FOOTER)
 
@@ -592,7 +514,7 @@ describe('footer text', () => {
     await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
     expect(await drawn(footer)).not.toContain('→')
 
-    verdict = '{"model":"sonnet","effort":"high","why":"hard"}'
+    verdict = '{"haiku":"high","sonnet":"high","opus":"high","why":"hard"}'
     await $.prompt.submit({ text: 'hard task across several files', wait: false, origin: { kind: 'composer' } })
     expect(await drawn(footer)).toContain('"children":[" Low → High "]')
 
@@ -606,7 +528,7 @@ describe('footer text', () => {
   test('/effortless stats reports the measured cost of every token kind, per effort, and the judge', async ($, on) => {
     engine(on)
     mock.clock(on)
-    judgeSays(on, '{"model":"sonnet","effort":"low","why":"simple"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"simple"}')
     on('turn.step', async function* (_$, e) {
       return {
         turnId: e.turnId,
@@ -646,34 +568,14 @@ describe('footer text', () => {
     await expect($.ui.mount(DESK_BAND)).rejects.toThrow()
   })
 
-  test('a model suggestion still asks above the prompt on desktop', async ($, on) => {
-    engine(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"simple"}')
-    mock.clock(on)
-    const rows = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    await rows.press({ key: 'auto-model' })
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    const ask = await $.ui.mount(DESK_BAND)
-    expect(await ask.find({ key: 'accept' })).toBeDefined()
-    await ask.unmount()
-    await rows.unmount()
-  })
-
-  test('the model row is paused: effort only, unless EFFORTLESS_MODEL_UI=1', async ($, on) => {
-    engine(on, { EFFORTLESS_MODEL_UI: '0' })
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    expect(await ui.find({ key: 'e-high' })).toBeDefined()
-    expect(await ui.find({ key: 'm-opus' })).toBeUndefined()
-    expect(await ui.find({ key: 'auto-model' })).toBeUndefined()
-    await ui.unmount()
-  })
 })
 
 describe('helpers', () => {
-  test('cacheSafe: effort may change on Opus 5.5 and Sonnet 5.5 only', () => {
+  test('cacheSafe: effort may change on Opus 5.5, Sonnet 5.5 and Haiku 5.5 only', () => {
     expect(cacheSafe('claude-opus-5-5')).toBe(true)
     expect(cacheSafe('claude-sonnet-5-5[1m]')).toBe(true)
+    expect(cacheSafe('claude-haiku-5-5')).toBe(true)
+    expect(cacheSafe('claude-haiku-4-5')).toBe(false)
     expect(cacheSafe('claude-fable-5-1')).toBe(false)
     expect(cacheSafe('claude-opus-4-8')).toBe(false)
     expect(cacheSafe('claude-opus-5')).toBe(false)
@@ -686,13 +588,32 @@ describe('helpers', () => {
     expect(parseJevKey('OTHER=1')).toBeUndefined()
   })
 
-  test('parseJevAnswer: a sure answer wins, an unsure one keeps the current effort, junk is nothing', () => {
-    const current = { model: 'opus' as const, effort: 'high' as const, why: '', by: 'manual' as const }
-    expect(parseJevAnswer(jevReply('low', 0.9), current)?.effort).toBe('low')
-    expect(parseJevAnswer(jevReply('low', 0.4), current)?.effort).toBe('high')
-    expect(parseJevAnswer(jevReply('low', 0.4), null)?.effort).toBe('low')
-    expect(parseJevAnswer(jevReply('turbo'), current)).toBeUndefined()
-    expect(parseJevAnswer('nope', current)).toBeUndefined()
+  test('parseJevAnswer: each model\'s choice and confidence as given, unsure ones too; a bad entry is left out; junk is nothing', () => {
+    const v = parseJevAnswer(jevReply({ haiku: 'max', sonnet: 'high', opus: 'medium' }, { opus: 0.4 }))
+    expect(v?.efforts).toEqual({ haiku: { effort: 'max', sure: 0.9 }, sonnet: { effort: 'high', sure: 0.9 }, opus: { effort: 'medium', sure: 0.4 } })
+    expect(v?.by).toBe('jev')
+    expect(parseJevAnswer(jevReply({ haiku: 'turbo', opus: 'low' }))?.efforts).toEqual({ opus: { effort: 'low', sure: 0.9 } })
+    expect(parseJevAnswer(jevReply('turbo'))).toBeUndefined()
+    expect(parseJevAnswer('nope')).toBeUndefined()
+    // No confidence: the choice's own probability stands in.
+    const probs = JSON.stringify({ answers: { effort_opus: { choice: 'low', probabilities: { low: 0.62, medium: 0.38 } } } })
+    expect(parseJevAnswer(probs)?.efforts.opus).toEqual({ effort: 'low', sure: 0.62 })
+  })
+
+  test('parseJevAnswer reads the answers under answers, under result.answers, or at the top level', () => {
+    const one = { effort_sonnet: { choice: 'high', confidence: 0.7 } }
+    for (const body of [{ answers: one }, { result: { answers: one } }, one]) {
+      expect(parseJevAnswer(JSON.stringify(body))?.efforts.sonnet).toEqual({ effort: 'high', sure: 0.7 })
+    }
+  })
+
+  test('parseVerdict: Haiku\'s effort for each model, one sure and why; a bad entry is left out', () => {
+    const v = parseVerdict('{"haiku":"max","sonnet":"turbo","opus":"medium","sure":0.6,"why":"big job"}')
+    expect(v?.efforts).toEqual({ haiku: { effort: 'max', sure: 0.6 }, opus: { effort: 'medium', sure: 0.6 } })
+    expect(v?.why).toBe('big job')
+    expect(v?.by).toBe('haiku')
+    expect(parseVerdict('{"model":"opus","effort":"high"}')).toBeUndefined()
+    expect(parseVerdict('I think sonnet')).toBeUndefined()
   })
 })
 
@@ -704,7 +625,7 @@ describe('follow-ups', () => {
 
   test('"go" after a judged prompt keeps its effort and asks no judge', async ($, on) => {
     engine(on)
-    const asked = judgeSays(on, '{"model":"opus","effort":"high","why":"hard"}')
+    const asked = judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"hard"}')
     const sent = recordSteps(on)
     await $.prompt.submit({ text: 'granska hela relayn', wait: false, origin: { kind: 'composer' } })
     await $.prompt.submit({ text: 'go', wait: false, origin: { kind: 'composer' } })
@@ -731,7 +652,7 @@ describe('named level', () => {
 
   test('a prompt that names a level runs at it without asking the judge, past Max', { options: { effortCeiling: 'high' } } as never, async ($, on) => {
     engine(on)
-    const asked = judgeSays(on, '{"model":"opus","effort":"low","why":"small"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"small"}')
     const sent = recordSteps(on)
     await $.prompt.submit({ text: 'max effort: find why the relay drops messages', wait: false, origin: { kind: 'composer' } })
     await step($, 'medium')
@@ -945,7 +866,7 @@ describe('cache countdown', () => {
 describe('cache guard', () => {
   test('on Fable Auto neither judges nor changes the effort, and the footer says Paused', async ($, on) => {
     engine(on, {}, 'claude-fable-5-1')
-    const asked = judgeSays(on, '{"model":"opus","effort":"low","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const sent: unknown[] = []
     on('turn.step', async function* (_$, e) {
       sent.push(e.effort)
@@ -965,7 +886,7 @@ describe('cache guard', () => {
 
   test('a pick made on Opus 5.5 is not applied to a Fable request', async ($, on) => {
     engine(on)
-    judgeSays(on, '{"model":"opus","effort":"low","why":"x"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const sent: unknown[] = []
     on('turn.step', async function* (_$, e) {
       sent.push(e.effort)
@@ -985,7 +906,7 @@ describe('cache guard', () => {
 describe('footer', () => {
   test('auto sets the effort of the request, never runs /effort or /model', async ($, on) => {
     engine(on)
-    judgeSays(on, '{"model":"sonnet","effort":"low","why":"simple"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"simple"}')
     const ran = recordCommands(on)
     const sent = recordSteps(on)
 
@@ -996,51 +917,13 @@ describe('footer', () => {
     expect(ran).toEqual([])
   })
 
-  test('a different model is only suggested, and /effortless switch switches it', async ($, on) => {
-    engine(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"simple"}')
-    const ran = recordCommands(on)
-    const mocked = mock.clock(on)
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    await ui.press({ key: 'auto-model' })
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    await mocked.advance(10)
-    expect(ran.some(c => c.startsWith('/model'))).toBe(false)
-    await ui.redraw()
-    expect(await ui.find({ key: 'accept' })).toBeDefined()
-
-    await ui.press({ key: 'accept' })
-    expect(ran).toContain('/model haiku')
-    await ui.unmount()
-  })
-
-  test('Keep turns the suggestion down and it does not come back', async ($, on) => {
-    engine(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"simple"}')
-    recordCommands(on)
-    const mocked = mock.clock(on)
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    await ui.press({ key: 'auto-model' })
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    await mocked.advance(10)
-    await ui.redraw()
-    await ui.press({ key: 'decline' })
-    await $.prompt.submit({ text: 'hej igen', wait: false, origin: { kind: 'composer' } })
-    await mocked.advance(10)
-    await ui.redraw()
-
-    expect(await ui.find({ key: 'accept' })).toBeUndefined()
-    await ui.unmount()
-  })
 })
 
 describe('band', () => {
   for (const surface of ['terminal'] as const) {
     test(`clicking an effort turns auto off and is what the turn runs with (${surface})`, async ($, on) => {
       engine(on)
-      const asked = judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+      const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
       const sent = recordSteps(on)
       const ran = recordCommands(on)
 
@@ -1068,7 +951,7 @@ describe('review fixes', () => {
   test('a Jev endpoint that never answers holds the prompt only for the timeout, then Haiku judges', async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     const mocked = mock.clock(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     on('http.fetch', () => new Promise(() => undefined) as never)
     const sent = recordSteps(on)
 
@@ -1084,7 +967,7 @@ describe('review fixes', () => {
   test('Jev answering with an error status falls through to Haiku', async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     on('http.fetch', () => ({ value: { status: 500, ok: false, headers: {}, text: 'boom' } }))
 
     await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
@@ -1093,7 +976,7 @@ describe('review fixes', () => {
 
   test('a model switch that changes the engine effort is not read as you choosing, Auto stays on', async ($, on) => {
     engine(on)
-    judgeSays(on, '{"model":"sonnet","effort":"low","why":"simple"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"simple"}')
     mock.clock(on)
     on('classic.PostModelSwitch', () => ({}) as never)
     const sent = recordSteps(on)
@@ -1116,25 +999,6 @@ describe('review fixes', () => {
     expect(sent[1].effort).toBe('low')
   })
 
-  test('/effortless switch switches to the suggested model and /effortless keep turns it down', async ($, on) => {
-    engine(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"simple"}')
-    const ran = recordCommands(on)
-    const mocked = mock.clock(on)
-    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
-    await ui.press({ key: 'auto-model' })
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    const result = await $.command.run({ command: 'effortless', args: 'switch' })
-    await mocked.advance(10)
-    expect(String(result.text)).toContain('haiku')
-    expect(ran).toContain('/model haiku')
-
-    await $.prompt.submit({ text: 'a new question about something else', wait: false, origin: { kind: 'composer' } })
-    const kept = await $.command.run({ command: 'effortless', args: 'keep' })
-    expect(String(kept.text)).toContain('Keeping')
-    await ui.unmount()
-  })
 })
 
 describe('judge choice (plugin settings)', () => {
@@ -1164,7 +1028,6 @@ describe('judge choice (plugin settings)', () => {
       layout: 'default',
       compactWith: 'haiku',
       handoffButton: 'advised',
-      modelAuto: 'off',
       helpers: 'off',
       theme: 'violet',
       appearance: 'auto',
@@ -1180,7 +1043,7 @@ describe('judge choice (plugin settings)', () => {
   test('haiku: a TypeSafe key in the environment is not used', { options: { judge: 'haiku' } } as never, async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     let fetched = 0
     on('http.fetch', () => {
       fetched++
@@ -1234,7 +1097,7 @@ describe('context for the judge', () => {
     const seen: { system?: string; prompt: string }[] = []
     on('model.complete', (_$, e) => {
       seen.push({ system: e.system, prompt: e.prompt })
-      return { value: { isAnswered: true as const, text: '{"model":"opus","effort":"high","why":"B is big"}', usage: USAGE } }
+      return { value: { isAnswered: true as const, text: '{"haiku":"high","sonnet":"high","opus":"high","why":"B is big"}', usage: USAGE } }
     })
     await $.prompt.submit({ text: 'B', wait: false, origin: { kind: 'composer' } })
     expect(seen[0].prompt).toContain('B (a complicated multi-step layout)')
@@ -1244,30 +1107,106 @@ describe('context for the judge', () => {
 })
 
 describe('model-aware effort', () => {
-  test('the judge is told which model runs and that effort is relative to it', async ($, on) => {
-    engine(on, {}, 'claude-sonnet-5-5')
+  /** Switches the session's model the way the app reports it. */
+  const switchModel = ($: Engine, from: string, to: string) =>
+    $.classic.PostModelSwitch({ from_model: from, to_model: to, requested_model: null, source: 'picker', context_tokens: 0 } as never)
+
+  test('Haiku reads the same question whatever effort was in force and whatever model runs', async ($, on) => {
+    engine(on)
     mock.clock(on)
+    on('classic.PostModelSwitch', () => ({}) as never)
     const seen: { system?: string; prompt: string }[] = []
+    let says = 'low'
     on('model.complete', (_$, e) => {
       seen.push({ system: e.system, prompt: e.prompt })
-      return { value: { isAnswered: true as const, text: '{"model":"sonnet","effort":"high","why":"x"}', usage: USAGE } }
+      return { value: { isAnswered: true as const, text: `{"haiku":"${says}","sonnet":"${says}","opus":"${says}","why":"x"}`, usage: USAGE } }
     })
-    await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
-    expect(seen[0].prompt).toContain('Current: sonnet')
-    expect(seen[0].system).toContain('Opus at medium does about what Sonnet does at high')
+    recordSteps(on)
+    const ask = async () => {
+      await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
+      await stepOn($, 'claude-opus-5-5')
+    }
+    await ask() // no pick yet
+    says = 'xhigh'
+    await ask() // the pick is low
+    await ask() // the pick is xhigh
+    await switchModel($, 'claude-opus-5-5', 'claude-sonnet-5-5')
+    await ask() // on Sonnet now
+    expect(seen.length).toBe(4)
+    const first = seen[0]!
+    for (const s of seen.slice(1)) expect(s).toEqual(first)
+    expect(first.prompt).not.toMatch(/Current|opus|sonnet|xhigh|low/i)
+    expect(first.system).not.toContain('one step lower')
+    expect(first.system).toContain('"haiku"')
   })
 
-  test('Jev gets the model in use and the same rule', async ($, on) => {
-    engine(on, { TYPESAFE_API_KEY: 'k' }, 'claude-opus-5-5')
+  test('a decision model gets the same body whatever effort was in force and whatever model runs, with a question per model', async ($, on) => {
+    engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)
+    on('classic.PostModelSwitch', () => ({}) as never)
     const bodies: Record<string, any>[] = []
+    let says = 'low'
     on('http.fetch', (_$, e) => {
       bodies.push(JSON.parse(String(e.init?.body)))
-      return { value: { status: 200, ok: true, headers: {}, text: jevReply('medium') } }
+      return { value: { status: 200, ok: true, headers: {}, text: jevReply(says) } }
     })
+    recordSteps(on)
+    const ask = async () => {
+      await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
+      await stepOn($, 'claude-opus-5-5')
+    }
+    await ask()
+    says = 'xhigh'
+    await ask()
+    await switchModel($, 'claude-opus-5-5', 'claude-sonnet-5-5')
+    await ask()
+    expect(bodies.length).toBe(3)
+    const first = bodies[0]!
+    for (const b of bodies.slice(1)) expect(b).toEqual(first)
+    expect(Object.keys(first.state).sort()).toEqual(['next_message', 'recent_conversation', 'task'])
+    expect(Object.keys(first.questions)).toEqual(['effort_haiku', 'effort_sonnet', 'effort_opus'])
+    expect(first.questions.effort_opus.instructions).toContain('Opus 5.5')
+    // Each model has its own scale: the same level is described differently per model.
+    expect(first.questions.effort_haiku.criteria.max).not.toBe(first.questions.effort_opus.criteria.max)
+    expect(JSON.stringify(first)).not.toMatch(/current_|one step lower/)
+  })
+
+  test('one verdict, and each model runs at its own answer', async ($, on) => {
+    engine(on, {}, 'claude-sonnet-5-5')
+    mock.clock(on)
+    judgeSays(on, '{"haiku":"max","sonnet":"high","opus":"medium","why":"a refactor"}')
+    const sent = recordSteps(on)
     await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
-    expect(bodies[0].state.current_model).toBe('opus')
-    expect(bodies[0].state.task).toContain('Opus at medium does about what')
+    await stepOn($, 'claude-sonnet-5-5')
+    expect(sent[0]).toEqual({ model: 'claude-sonnet-5-5', effort: 'high' })
+  })
+
+  test('a switch to another model takes that model\'s answer, and "go" keeps it', async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    on('classic.PostModelSwitch', () => ({}) as never)
+    const asked = judgeSays(on, '{"haiku":"max","sonnet":"high","opus":"medium","why":"a refactor"}')
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
+    await stepOn($, 'claude-opus-5-5')
+    await switchModel($, 'claude-opus-5-5', 'claude-sonnet-5-5')
+    await stepOn($, 'claude-sonnet-5-5')
+    await $.prompt.submit({ text: 'go', wait: false, origin: { kind: 'composer' } })
+    await stepOn($, 'claude-sonnet-5-5')
+    expect(asked.length).toBe(1)
+    expect(sent.map(s => s.effort)).toEqual(['medium', 'high', 'high'])
+  })
+
+  test('a level you named stays across a switch', async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    on('classic.PostModelSwitch', () => ({}) as never)
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'fix it, max effort', wait: false, origin: { kind: 'composer' } })
+    await switchModel($, 'claude-opus-5-5', 'claude-sonnet-5-5')
+    await stepOn($, 'claude-sonnet-5-5')
+    expect(sent[0].effort).toBe('max')
   })
 })
 
@@ -1275,7 +1214,7 @@ describe('keys', () => {
   test('auto never opens ~/.config/jev/.env: it judges with Haiku', async ($, on) => {
     engine(on, { USERPROFILE: 'C:/Users/x' })
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const read: string[] = []
     on('fs.read', (_$, e) => {
       read.push(e.path)
@@ -1494,7 +1433,7 @@ describe('judge failures are said', () => {
   test('Jev out of credits: the person is told once, and Haiku judges', async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     on('http.fetch', () => ({ value: { status: 402, ok: false, headers: {}, text: 'payment required' } }))
     const said: string[] = []
     on('ui.toast', (_$, e) => {
@@ -1525,7 +1464,7 @@ describe('short answers to a question', () => {
     const said: { role: string; text: string }[] = []
     engine(on, {}, 'claude-sonnet-5-5', said)
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"high","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"x"}')
     await $.prompt.submit({ text: 'refactor the sync engine end to end', wait: false, origin: { kind: 'composer' } })
     said.push({ role: 'assistant', text: 'Done. Should I archive the old branch?' })
     await $.prompt.submit({ text: 'yes', wait: false, origin: { kind: 'composer' } })
@@ -1535,8 +1474,8 @@ describe('short answers to a question', () => {
   test('Jev unsure: Haiku makes the call', async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' }, 'claude-sonnet-5-5')
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
-    on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: jevReply('high', 0.3, 'sonnet') } }))
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
+    on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: jevReply('high', 0.3) } }))
     await $.prompt.submit({ text: 'show me the last five commits please', wait: false, origin: { kind: 'composer' } })
     expect(asked.length).toBe(1)
   })
@@ -1551,7 +1490,7 @@ describe('images', () => {
   test('"fix this" with a screenshot is judged, not kept as a follow-up', async ($, on) => {
     engine(on, {}, 'claude-sonnet-5-5')
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"medium","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"medium","sonnet":"medium","opus":"medium","why":"x"}')
     await $.prompt.submit({ text: 'refactor the sync engine end to end', wait: false, origin: { kind: 'composer' } })
     await $.prompt.submit({ text: 'fix this', wait: false, origin: { kind: 'composer' }, attachments: [{ type: 'image', mediaType: 'image/png' }] } as never)
     expect(asked.length).toBe(2)
@@ -1728,7 +1667,7 @@ describe('handoff', () => {
 
   function handoffEngine(on: On, said: { role: string; text: string }[] = []) {
     mock.store(on)
-    mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+    mock.env(on, {})
     on('ui.status', () => ({ value: undefined }))
     on('session.messages', () => ({ value: said }) as never)
     on('session.model', () => ({ value: 'claude-opus-5-5' }))
@@ -1942,7 +1881,7 @@ describe('handoff', () => {
 
   test('the handoff is written by a fork: no turn in the chat, then cleared and sent', async ($, on) => {
     mock.store(on)
-    mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+    mock.env(on, {})
     on('ui.status', () => ({ value: undefined }))
     on('session.messages', () => ({ value: [] }) as never)
     on('session.model', () => ({ value: 'claude-opus-5-5' }))
@@ -1980,7 +1919,7 @@ describe('handoff', () => {
   test('without a fork (no reply yet, or it failed) the handoff is written as a turn, then cleared and sent', async ($, on) => {
     // engine() without its prompt.submit, so this test can see what the mod sends.
     mock.store(on)
-    mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+    mock.env(on, {})
     on('ui.status', () => ({ value: undefined }))
     on('session.messages', () => ({ value: [] }) as never)
     on('session.model', () => ({ value: 'claude-opus-5-5' }))
@@ -2014,7 +1953,7 @@ describe('handoff', () => {
 
   test('a fork that writes nothing says why: in a toast and in /effortless debug, and the turn takes over', async ($, on) => {
     mock.store(on)
-    mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+    mock.env(on, {})
     on('ui.status', () => ({ value: undefined }))
     on('session.messages', () => ({ value: [] }) as never)
     on('session.model', () => ({ value: 'claude-opus-5-5' }))
@@ -2328,10 +2267,10 @@ describe('running hot and judge down', () => {
   test('a failing judge shows the judge-down band until it answers again', async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)
-    judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     let status = 402
     on('http.fetch', () => ({ value: status === 200
-      ? { status: 200, ok: true, headers: {}, text: jevReply('high', 0.9, 'sonnet') }
+      ? { status: 200, ok: true, headers: {}, text: jevReply('high', 0.9) }
       : { status, ok: false, headers: {}, text: 'payment required' } }))
     on('ui.toast', () => ({ value: undefined }) as never)
     await start($, on)
@@ -2370,7 +2309,7 @@ describe('settings panel', () => {
     await band.select({ key: 'settings-judge-pick', value: 'jev' })
     await band.press({ key: 'settings-judge-test' })
     const result = async () => (await band.findAll({ type: 'Text' })).map(t => t.text).find(t => /^[✓✗]/.test(t))
-    expect(await result()).toContain('✓ Jev answered: low in')
+    expect(await result()).toContain('✓ Jev answered: haiku low 90% · sonnet low 90% · opus low 90% in')
     status = 401
     await band.press({ key: 'settings-judge-test' })
     expect(await result()).toBe('✗ Jev rejected the key (401)')
@@ -2397,7 +2336,7 @@ describe('settings panel', () => {
     expect(bounded('max', 'low', 'high')).toBe('high')
     expect(withJevKey('A=1\nTYPESAFE_API_KEY=old\n', 'new')).toBe('A=1\nTYPESAFE_API_KEY=new\n')
     expect(withJevKey('A=1', 'new')).toBe('A=1\nTYPESAFE_API_KEY=new\n')
-    expect(parseVerdict('{"model":"opus","effort":"high","sure":0.7,"why":"x"}')?.sure).toBe(0.7)
+    expect(parseVerdict('{"haiku":"high","sonnet":"high","opus":"high","sure":0.7,"why":"x"}')?.efforts.opus?.sure).toBe(0.7)
   })
 
   test('Open settings opens the panel; the slider, range and key are saved from it', async ($, on) => {
@@ -2446,17 +2385,11 @@ describe('settings panel', () => {
     await panel.press({ key: 'settings-back' })
     await panel.press({ key: 'settings-card-handoff' })
     await panel.select({ key: 'settings-skill', value: 'session-handoff' })
+    // Which model writes a compaction sits with the handoff settings.
+    expect(await panel.find({ key: 'settings-compact-with' })).toBeDefined()
     expect(await panel.find({ key: 'show-box-swamp' })).toBeDefined()
     expect(await panel.find({ key: 'show-box-cold' })).toBeDefined()
     await panel.press({ key: 'settings-back' })
-    // Model has its own card: two choices, and the card says which is on. Off by default.
-    expect(await drawn(panel)).toContain("Always the chat's")
-    await panel.press({ key: 'settings-card-model' })
-    await panel.press({ key: 'settings-model-on' })
-    // Compact with is a model choice: it lives here, not in the Handoff card.
-    expect(await panel.find({ key: 'settings-compact-with' })).toBeDefined()
-    await panel.press({ key: 'settings-back' })
-    expect(await drawn(panel)).toContain('Cheaper when it can')
     // The cards say what is set, unsaved changes included.
     expect(await drawn(panel)).toContain('Smarter · medium to max · helpers')
     expect(await drawn(panel)).toContain('/session-handoff · compact alert at')
@@ -2474,7 +2407,6 @@ describe('settings panel', () => {
     expect(set).toContainEqual({ key: 'effortless.effortBias', value: '1' })
     expect(set).toContainEqual({ key: 'effortless.effortFloor', value: 'medium' })
     expect(set).toContainEqual({ key: 'effortless.judge', value: 'jev' })
-    expect(set).toContainEqual({ key: 'effortless.modelAuto', value: 'on' })
     expect(set).toContainEqual({ key: 'effortless.helpers', value: 'on' })
     expect(said.join(' | ')).toContain('key saved')
     expect(files['/Users/x/.config/jev/.env']).toBe('OTHER=1\nTYPESAFE_API_KEY=tk-new\n')
@@ -2681,99 +2613,6 @@ describe('dashboard', () => {
     await guide.unmount()
   }
 
-  test('cache-aware routing, live through the hooks: a cold Sonnet is skipped on a big warm Opus chat, Haiku moves, a cold chat moves, and a routed reply leaves the countdown alone', { options: { modelAuto: 'on' } } as never, async ($, on) => {
-    engine(on)
-    const mocked = mock.clock(on)
-    on('session.usage', () => ({ value: { context: { tokens: 100_000, window: 1_000_000, percent: 10 } } }) as never)
-    let verdict = '{"model":"opus","effort":"high","why":"big refactor"}'
-    on('model.complete', () => ({ value: { isAnswered: true as const, text: verdict, usage: USAGE } }))
-    const sent: string[] = []
-    const used = { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 10_000, cache_creation: { ephemeral_1h_input_tokens: 10_000 } }
-    on('turn.step', async function* (_$, e) {
-      sent.push(e.model)
-      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: used } as never
-    })
-    await start($, on)
-    await closeSetup($, DESK_BAND)
-    await mocked.advance(16_000)
-    const ask = async (v: string, text: string) => {
-      verdict = v
-      await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
-      await step($)
-    }
-    const cacheLine = async () => String((await $.command.run({ command: 'effortless', args: 'debug' })).text).split(' | ').find(l => l.startsWith('cache:')) ?? ''
-    // A hard prompt on the chat's own model warms the Opus cache.
-    await ask('{"model":"opus","effort":"high","why":"big refactor"}', 'refactor the whole auth layer')
-    expect(sent.at(-1)).toBe('claude-opus-5-5')
-    // Sonnet has never answered: its cache is cold, and writing 100k tokens there costs more than reading them on Opus.
-    await ask('{"model":"sonnet","effort":"low","why":"small fix"}', 'rename this variable to userId')
-    expect(sent.at(-1)).toBe('claude-opus-5-5')
-    // A cold Haiku loses to a warm Opus read as well, whatever the size of the chat.
-    await mocked.advance(30 * 60_000)
-    await ask('{"model":"haiku","effort":"low","why":"lookup"}', 'what is the folder called')
-    expect(sent.at(-1)).toBe('claude-opus-5-5')
-    // An hour and more on, the Opus cache is cold too: staying would write it all again, so Sonnet is worth it now.
-    await mocked.advance(61 * 60_000)
-    await ask('{"model":"sonnet","effort":"low","why":"small fix"}', 'add a log line here')
-    expect(sent.at(-1)).toBe('claude-sonnet-5-5')
-    // Opus warm again, Sonnet warm from the last reply: the switch reads a warm cache and goes ahead.
-    await ask('{"model":"opus","effort":"high","why":"hard"}', 'debug the race in the queue')
-    expect(sent.at(-1)).toBe('claude-opus-5-5')
-    await ask('{"model":"sonnet","effort":"low","why":"small fix"}', 'fix the typo in the log line')
-    expect(sent.at(-1)).toBe('claude-sonnet-5-5')
-    // Twenty minutes on, a routed reply from the warm Sonnet must not restart the chat's countdown: Opus is still 40 min out.
-    await mocked.advance(20 * 60_000)
-    await ask('{"model":"sonnet","effort":"low","why":"small fix"}', 'fix another typo in the log line')
-    expect(sent.at(-1)).toBe('claude-sonnet-5-5')
-    expect(await cacheLine()).toContain('40 min left')
-  })
-
-  test('looksLikeRedo: a correction after a cheaper answer, not a thank-you or a new task', () => {
-    for (const yes of ["no, that's wrong", 'Nope. still fails on line 3', 'wrong, it is the other file', "that doesn't work", 'still broken', 'try again please', 'funkar inte', 'fel, det ska vara src', 'inte rätt', "it still doesn't compile"])
-      expect(looksLikeRedo(yes)).toBe(true)
-    for (const no of ['no problem, thanks', 'nothing else to fix', 'now add a test for it', 'looks right, ship it', 'what does this function do', 'normal', 'felsök det här', 'ok'])
-      expect(looksLikeRedo(no)).toBe(false)
-  })
-
-  test('a redone cheaper answer: the retry and the next prompts stay on the chat model, and stats count it', { options: { modelAuto: 'on' } } as never, async ($, on) => {
-    engine(on)
-    const mocked = mock.clock(on)
-    on('session.usage', () => ({ value: { context: { tokens: 100_000, window: 1_000_000, percent: 10 } } }) as never)
-    let verdict = '{"model":"opus","effort":"high","why":"big refactor"}'
-    on('model.complete', () => ({ value: { isAnswered: true as const, text: verdict, usage: USAGE } }))
-    const sent: string[] = []
-    const used = { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 10_000, cache_creation: { ephemeral_1h_input_tokens: 10_000 } }
-    on('turn.step', async function* (_$, e) {
-      sent.push(e.model)
-      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: used } as never
-    })
-    await start($, on)
-    await closeSetup($, DESK_BAND)
-    await mocked.advance(16_000)
-    const HAIKU = '{"model":"haiku","effort":"low","why":"lookup"}'
-    const ask = async (v: string, text: string) => {
-      verdict = v
-      await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
-      await step($)
-    }
-    await ask('{"model":"opus","effort":"high","why":"big refactor"}', 'refactor the whole auth layer')
-    // Once the Opus cache has gone cold, a Haiku move is cheaper than writing it all again.
-    await mocked.advance(61 * 60_000)
-    await ask(HAIKU, 'what is the folder called')
-    expect(sent.at(-1)).toBe('claude-haiku-5-5')
-    // The person says it was wrong: the retry runs on Opus, and so do the next ones, though the judge still says Haiku.
-    await ask(HAIKU, "no that's wrong, it is the src folder")
-    expect(sent.at(-1)).toBe('claude-opus-5-5')
-    for (let i = 1; i < REDO_STAY_PROMPTS; i++) {
-      await ask(HAIKU, `which file holds the config number ${i}`)
-      expect(sent.at(-1)).toBe('claude-opus-5-5')
-    }
-    await ask(HAIKU, 'what is the folder for the tests')
-    expect(sent.at(-1)).toBe('claude-haiku-5-5')
-    const stats = String((await $.command.run({ command: 'effortless', args: 'stats' })).text)
-    expect(stats).toContain('Cheaper model: 2 prompts moved down, 1 redone (50 %)')
-  })
-
   test('light appearance: surfaces come out pale, text reads on them, alpha and hue are kept', () => {
     const lum = (hex: string) => {
       const n = parseInt(hex.slice(1, 7), 16)
@@ -2937,35 +2776,6 @@ describe('dashboard', () => {
     expect((await debug()).split(String.fromCharCode(10)).at(-1)).toBe('model used: claude-opus-5-5 at xhigh')
   })
 
-  test('a thank-you after a cheaper answer is not a redo', { options: { modelAuto: 'on' } } as never, async ($, on) => {
-    engine(on)
-    const mocked = mock.clock(on)
-    on('session.usage', () => ({ value: { context: { tokens: 100_000, window: 1_000_000, percent: 10 } } }) as never)
-    let verdict = '{"model":"opus","effort":"high","why":"big refactor"}'
-    on('model.complete', () => ({ value: { isAnswered: true as const, text: verdict, usage: USAGE } }))
-    const sent: string[] = []
-    const used = { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 10_000, cache_creation: { ephemeral_1h_input_tokens: 10_000 } }
-    on('turn.step', async function* (_$, e) {
-      sent.push(e.model)
-      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: used } as never
-    })
-    await start($, on)
-    await closeSetup($, DESK_BAND)
-    await mocked.advance(16_000)
-    const HAIKU = '{"model":"haiku","effort":"low","why":"lookup"}'
-    const ask = async (v: string, text: string) => {
-      verdict = v
-      await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
-      await step($)
-    }
-    await ask('{"model":"opus","effort":"high","why":"big refactor"}', 'refactor the whole auth layer')
-    await mocked.advance(61 * 60_000)
-    await ask(HAIKU, 'what is the folder called')
-    await ask(HAIKU, 'no problem, now what is the tests folder called')
-    expect(sent.at(-1)).toBe('claude-haiku-5-5')
-    expect(String((await $.command.run({ command: 'effortless', args: 'stats' })).text)).toContain('0 redone')
-  })
-
   test("its lines: the effort, cache and context; the judge's reason and the last reply", () => {
     const base = { auto: true, paused: false, judging: false, effort: 'medium' as const, cacheNow: 42, contextPercent: 18, reason: 'Jev: a small fix', last: null }
     expect(dashboardLines(base).head).toBe(`✦ Medium · cache ${cacheLabel(42)} · 18% context`)
@@ -3076,7 +2886,7 @@ describe('dashboard', () => {
       systems.push(String((e as { system?: string }).system ?? '').slice(0, 30))
       const text = String((e as { system?: string }).system ?? '').includes('decide whether the person should hand off')
         ? JSON.stringify({ handoff })
-        : '{"model":"opus","effort":"high","why":"big refactor"}'
+        : '{"haiku":"high","sonnet":"high","opus":"high","why":"big refactor"}'
       return { value: { isAnswered: true as const, text, usage: USAGE } }
     })
     await start($, on)
@@ -3130,14 +2940,6 @@ describe('dashboard', () => {
     expect(parseHandoffAnswer('{"handoff":null}')).toBeNull()
     expect(parseHandoffAnswer('{"handoff":"  "}')).toBeNull()
     expect(parseHandoffAnswer('maybe')).toBeNull()
-  })
-
-  test('parseVerdict keeps only a real handoff reason', () => {
-    const base = '"model":"opus","effort":"high","why":"x"'
-    expect(parseVerdict(`{${base},"handoff":"Task done"}`)?.handoff).toBe('Task done')
-    expect(parseVerdict(`{${base},"handoff":"   "}`)?.handoff).toBeUndefined()
-    expect(parseVerdict(`{${base},"handoff":false}`)?.handoff).toBeUndefined()
-    expect(parseVerdict(`{${base}}`)?.handoff).toBeUndefined()
   })
 
   test('the Handoff glow steps up every 10% from 30%', () => {
@@ -3255,7 +3057,7 @@ describe('a message typed while a turn runs', () => {
     const asked: string[] = []
     on('model.complete', (_$, e) => {
       asked.push(e.prompt)
-      return { value: { isAnswered: true as const, text: `{"model":"opus","effort":"${says.effort}","why":"x"}`, usage: USAGE } }
+      return { value: { isAnswered: true as const, text: `{"haiku":"${says.effort}","sonnet":"${says.effort}","opus":"${says.effort}","why":"x"}`, usage: USAGE } }
     })
     return asked
   }
@@ -3460,7 +3262,7 @@ describe('agent panel', () => {
   })
 
   test('with Helpers on, the judge picks a subagent\'s effort at its spawn and every request of it runs at that', { options: { helpers: 'on' } } as never, async ($, on) => {
-    const asked = judgeSays(on, '{"model":"opus","effort":"low","why":"quick search"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"quick search"}')
     on('agent.spawn', () => ({ agentId: 'h1', model: 'claude-opus-5-5' }) as never)
     on('turn.complete', () => ({ text: '' }))
     const sent = recordSteps(on)
@@ -3483,7 +3285,7 @@ describe('agent panel', () => {
   })
 
   test('a subagent\'s first request before its spawn resolves still gets the picked effort', { options: { helpers: 'on' } } as never, async ($, on) => {
-    judgeSays(on, '{"model":"opus","effort":"low","why":"quick search"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"quick search"}')
     const sent = recordSteps(on)
     on('agent.list', () => ({ value: [{ id: 'h2', description: 'find files', type: 'Explore', status: 'running' }] }) as never)
     // The engine's own spawn: the subagent's first request goes out before the spawn answers with its id.
@@ -3502,6 +3304,63 @@ describe('agent panel', () => {
     expect(sent.map(s => s.effort)).toEqual(['medium'])
   })
 
+  test('with Helpers on, a subagent runs at the answer for its own model', { options: { helpers: 'on' } } as never, async ($, on) => {
+    judgeSays(on, '{"haiku":"max","sonnet":"xhigh","opus":"high","why":"a big search"}')
+    on('agent.spawn', () => ({ agentId: 'h5', model: 'claude-sonnet-5-5' }) as never)
+    const sent = recordSteps(on)
+    await start($, on)
+    await $.agent.spawn({ prompt: 'map every caller of judge()', description: 'map callers', subagentType: 'Explore' } as never)
+    await stepOn($, 'claude-sonnet-5-5', 'high', 'h5')
+    expect(sent.map(s => s.effort)).toEqual(['xhigh'])
+  })
+
+  test('with Helpers on, a decision model unsure for the subagent\'s model leaves it at the chat\'s effort, and Haiku is not asked', { options: { helpers: 'on', decisionModels: 'opencode/jev-1.13-free' } } as never, async ($, on) => {
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
+    on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: jevReply({ sonnet: 'xhigh', opus: 'xhigh' }, { sonnet: 0.3 }) } }))
+    on('agent.spawn', () => ({ agentId: 'h6', model: 'claude-sonnet-5-5' }) as never)
+    const sent = recordSteps(on)
+    await start($, on)
+    await $.agent.spawn({ prompt: 'map every caller of judge()', description: 'map callers', subagentType: 'Explore' } as never)
+    await stepOn($, 'claude-sonnet-5-5', 'high', 'h6')
+    expect(asked.some(p => p.includes('subagent'))).toBe(false)
+    expect(sent.map(s => s.effort)).toEqual(['high'])
+  })
+
+  test('with Helpers off, a subagent on another model than the chat\'s keeps the effort Claude Code gives it', async ($, on) => {
+    engine(on)
+    judgeSays(on, '{"haiku":"xhigh","sonnet":"xhigh","opus":"xhigh","why":"hard"}')
+    on('agent.spawn', () => ({ agentId: 'h7', model: 'claude-sonnet-5-5' }) as never)
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'find why the relay drops messages', wait: false, origin: { kind: 'composer' } })
+    await $.agent.spawn({ prompt: 'read relay/worker.js', description: 'read relay', subagentType: 'Explore' } as never)
+    await stepOn($, 'claude-sonnet-5-5', 'medium', 'h7')
+    expect(sent.map(s => s.effort)).toEqual(['medium'])
+  })
+
+  test('with Helpers on, a Haiku 5.5 subagent runs at the Haiku answer', { options: { helpers: 'on' } } as never, async ($, on) => {
+    judgeSays(on, '{"haiku":"max","sonnet":"xhigh","opus":"high","why":"a big search"}')
+    on('agent.spawn', () => ({ agentId: 'h8', model: 'claude-haiku-5-5' }) as never)
+    const sent = recordSteps(on)
+    await start($, on)
+    await $.agent.spawn({ prompt: 'map every caller of judge()', description: 'map callers', subagentType: 'Explore' } as never)
+    await stepOn($, 'claude-haiku-5-5', 'medium', 'h8')
+    expect(sent.map(s => s.effort)).toEqual(['max'])
+  })
+
+  test('with Helpers on, a decision model\'s helper pick says how sure it was', { options: { helpers: 'on', decisionModels: 'opencode/jev-1.13-free' } } as never, async ($, on) => {
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
+    on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: jevReply('high', 0.7) } }))
+    on('agent.spawn', () => ({ agentId: 'h9', model: 'claude-opus-5-5' }) as never)
+    on('turn.complete', () => ({ text: '' }))
+    await start($, on)
+    await $.agent.spawn({ prompt: 'map every caller of judge()', description: 'map callers', subagentType: 'Explore' } as never)
+    await $.command.run({ command: 'effortless', args: 'agents' })
+    const pane = await $.ui.mount(PANE)
+    await pane.press({ key: 'agent-h9-press' }).catch(() => undefined)
+    expect(await drawn(pane)).toContain('70% sure')
+    await pane.unmount()
+  })
+
   test("helperFloor: medium, the person's Min when higher, never above their Max", () => {
     expect(helperFloor('low', 'max')).toBe('medium')
     expect(helperFloor('high', 'max')).toBe('high')
@@ -3509,7 +3368,7 @@ describe('agent panel', () => {
   })
 
   test('with Helpers off, a subagent runs at the chat\'s effort and the judge is not asked', async ($, on) => {
-    const asked = judgeSays(on, '{"model":"opus","effort":"low","why":"quick search"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"quick search"}')
     on('agent.spawn', () => ({ agentId: 'h3', model: 'claude-opus-5-5' }) as never)
     const sent = recordSteps(on)
     await start($, on)
@@ -3523,7 +3382,7 @@ describe('agent panel', () => {
 
   test('with Helpers off, a subagent of a judged turn runs at the turn\'s effort, never below medium', async ($, on) => {
     engine(on)
-    let verdict = '{"model":"opus","effort":"xhigh","why":"hard"}'
+    let verdict = '{"haiku":"xhigh","sonnet":"xhigh","opus":"xhigh","why":"hard"}'
     const asked: string[] = []
     on('model.complete', (_$, e) => {
       asked.push(e.prompt)
@@ -3539,7 +3398,7 @@ describe('agent panel', () => {
     await $.prompt.submit({ text: 'find why the relay drops messages', wait: false, origin: { kind: 'composer' } })
     await $.agent.spawn({ prompt: 'read relay/worker.js', description: 'read relay', subagentType: 'Explore' } as never)
     await sub()
-    verdict = '{"model":"opus","effort":"low","why":"small"}'
+    verdict = '{"haiku":"low","sonnet":"low","opus":"low","why":"small"}'
     await $.prompt.submit({ text: 'list the files in hooks', wait: false, origin: { kind: 'composer' } })
     await sub()
     // No judge call for the subagent itself; it follows the turn, raised to medium at least.
@@ -3741,7 +3600,7 @@ describe('decision models (fork)', () => {
   test('a 12 s per-model timeout is waited out in full: past the old 9 s cap no judge is asked yet, after it Haiku judges', { options: { decisionModels: 'opencode/jev-1.13-free', judgeTimeoutMs: '12000', judgeBudgetMs: '20000' } } as never, async ($, on) => {
     engine(on)
     const mocked = mock.clock(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     on('http.fetch', () => new Promise(() => undefined) as never)
     const sent = recordSteps(on)
 
@@ -3759,7 +3618,7 @@ describe('decision models (fork)', () => {
   test('the band says which decision model answered', { options: { decisionModels: 'openrouter/typesafe/jev-1.13', openrouterKey: 'or-k', hide: '', layout: 'default' } } as never, async ($, on) => {
     engine(on)
     mock.clock(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     toasts(on)
     decisions(on, () => ({ status: 200, text: jevReply('max') }))
     on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
@@ -3793,7 +3652,7 @@ describe('decision models (fork)', () => {
   test('Zen first, with no key; when it fails OpenRouter answers with its key, and Haiku is not asked', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
     engine(on)
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const said = toasts(on)
     const calls = decisions(on, url => (url.includes('opencode.ai') ? { status: 500, text: 'down' } : { status: 200, text: jevReply('max') }))
     const sent = recordSteps(on)
@@ -3806,7 +3665,7 @@ describe('decision models (fork)', () => {
     expect(calls[0].body.model).toBe('jev-1.13-free')
     expect(calls[1].auth).toBe('Bearer or-k')
     expect(calls[1].body.model).toBe('typesafe/jev-1.13')
-    expect(calls[1].body.questions.effort.type).toBe('choice')
+    expect(calls[1].body.questions.effort_opus.type).toBe('choice')
     // Only OpenRouter is told which app is calling: it names the app in its logs.
     expect(calls[1].headers).toMatchObject({ 'HTTP-Referer': 'https://github.com/capyBearista/effortless', 'X-OpenRouter-Title': 'effortless', 'X-OpenRouter-App-Visibility': 'hidden' })
     expect(Object.keys(calls[0].headers).some(h => /referer|openrouter/i.test(h))).toBe(false)
@@ -3818,7 +3677,7 @@ describe('decision models (fork)', () => {
   test('an OpenRouter model with no key is skipped without a request; Zen answers', { options: { decisionModels: 'openrouter/typesafe/jev-1.13, opencode/jev-1.13-free' } } as never, async ($, on) => {
     engine(on)
     mock.clock(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const calls = decisions(on, () => ({ status: 200, text: jevReply('low') }))
     const sent = recordSteps(on)
 
@@ -3832,7 +3691,7 @@ describe('decision models (fork)', () => {
   test('OPENROUTER_API_KEY stands in when no key is set', { options: { decisionModels: 'openrouter/typesafe/jev-1.13' } } as never, async ($, on) => {
     engine(on, { OPENROUTER_API_KEY: 'env-k' })
     mock.clock(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const calls = decisions(on, () => ({ status: 200, text: jevReply('high') }))
     recordSteps(on)
 
@@ -3846,7 +3705,7 @@ describe('decision models (fork)', () => {
   test('when every decision model fails, Haiku judges and one toast names the last reason', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
     engine(on)
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"medium","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"medium","sonnet":"medium","opus":"medium","why":"x"}')
     const said = toasts(on)
     const calls = decisions(on, url => (url.includes('opencode.ai') ? { status: 500, text: 'down' } : { status: 429, text: 'slow down' }))
     const sent = recordSteps(on)
@@ -3863,7 +3722,7 @@ describe('decision models (fork)', () => {
   test('an unsure answer ends the chain: Haiku decides and the next model is not asked', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
     engine(on)
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"opus","effort":"high","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"x"}')
     const calls = decisions(on, () => ({ status: 200, text: jevReply('low', 0.3) }))
     recordSteps(on)
 
@@ -3874,10 +3733,70 @@ describe('decision models (fork)', () => {
     expect(asked.length).toBe(1)
   })
 
+  test('unsure only for another model than the one in use: no second opinion, the answer for this model stands', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    const asked = judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"x"}')
+    decisions(on, () => ({ status: 200, text: jevReply({ haiku: 'max', sonnet: 'xhigh', opus: 'low' }, { sonnet: 0.2 }) }))
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'kanske', wait: false, origin: { kind: 'composer' } })
+    await step($)
+    expect(asked.length).toBe(0)
+    expect(sent[0].effort).toBe('low')
+  })
+
+  test('unsure, and Haiku gives no answer either: the effort in force is kept and the band says so', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    on('model.complete', () => ({ value: { isAnswered: false as const } }) as never)
+    let says = jevReply('high', 0.95)
+    decisions(on, () => ({ status: 200, text: says }))
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
+    await step($)
+    says = jevReply('low', 0.3)
+    await $.prompt.submit({ text: 'and what about the lexer', wait: false, origin: { kind: 'composer' } })
+    await step($)
+    expect(sent.map(s => s.effort)).toEqual(['high', 'high'])
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
+    expect(await drawn(ui)).toContain('unsure, keeping')
+    await ui.unmount()
+  })
+
+  test('unsure on the first prompt: the effort kept is the app\'s own, within Min and Max', { options: { decisionModels: CHAIN, openrouterKey: 'or-k', effortFloor: 'high' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    on('model.complete', () => ({ value: { isAnswered: false as const } }) as never)
+    decisions(on, () => ({ status: 200, text: jevReply('low', 0.3) }))
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
+    await step($, 'medium')
+    expect(sent[0].effort).toBe('high')
+  })
+
+  test('a switch away from an unsure pick takes the new model\'s sure answer, and says how sure', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    on('classic.PostModelSwitch', () => ({}) as never)
+    on('model.complete', () => ({ value: { isAnswered: false as const } }) as never)
+    decisions(on, () => ({ status: 200, text: jevReply({ sonnet: 'xhigh', opus: 'low' }, { sonnet: 0.8, opus: 0.3 }) }))
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
+    await $.classic.PostModelSwitch({ from_model: 'claude-opus-5-5', to_model: 'claude-sonnet-5-5', requested_model: null, source: 'picker', context_tokens: 0 } as never)
+    // The app already on xhigh, so the band's note is the reason, not "/effort shows …".
+    await stepOn($, 'claude-sonnet-5-5', 'xhigh')
+    expect(sent[0].effort).toBe('xhigh')
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
+    const text = await drawn(ui)
+    expect(text).toContain('80% sure')
+    expect(text).not.toContain('unsure, keeping')
+    await ui.unmount()
+  })
+
   test('with the haiku judge picked, decision models are not asked', { options: { judge: 'haiku', decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
     engine(on)
     mock.clock(on)
-    const asked = judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const calls = decisions(on, () => ({ status: 200, text: jevReply('max') }))
     recordSteps(on)
 
@@ -3935,7 +3854,7 @@ describe('decision models in the settings and the guide (fork)', () => {
     mock.clock(on)
     toasts(on)
     configSet(on)
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const urls: string[] = []
     on('http.fetch', (_$, e) => {
       urls.push(e.url)
@@ -4016,7 +3935,7 @@ describe('decision models in the settings and the guide (fork)', () => {
     toasts(on)
     configSet(on)
     const { files, ran } = home(on, { '/h/.config/openrouter.env': 'OTHER=1\n' })
-    judgeSays(on, '{"model":"haiku","effort":"low","why":"x"}')
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const auth: (string | undefined)[] = []
     on('http.fetch', (_$, e) => {
       auth.push((e.init?.headers as Record<string, string> | undefined)?.authorization)
@@ -4048,7 +3967,7 @@ describe('decision models in the settings and the guide (fork)', () => {
     await panel.press({ key: 'settings-card-judge' })
     await panel.press({ key: 'settings-judge-test' })
     const text = await drawn(panel)
-    expect(text).toContain('jev-1.13-free answered: low')
+    expect(text).toContain('jev-1.13-free answered: haiku low')
     expect(text).toContain('x/nope: failed (404)')
     await panel.unmount()
   })
