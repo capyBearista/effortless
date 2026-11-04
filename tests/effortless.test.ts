@@ -440,9 +440,10 @@ describe('footer text', () => {
     await footer.unmount()
   })
 
-  test('on Haiku there is no effort to name', async ($, on) => {
+  test('on Haiku 5.5 the effort is named and applied: the Haiku answer', async ($, on) => {
     engine(on, {}, 'claude-haiku-5-5')
-    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"simple"}')
+    judgeSays(on, '{"haiku":"high","sonnet":"low","opus":"low","why":"simple"}')
+    const sent = recordSteps(on)
     mock.clock(on)
     on('classic.PostModelSwitch', () => ({}) as never)
     const footer = await $.ui.mount(FOOTER)
@@ -454,8 +455,17 @@ describe('footer text', () => {
       context_tokens: 0,
     } as never)
     await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    expect(await drawn(footer)).not.toContain('Low')
+    expect(await drawn(footer)).toContain('High')
+    await stepOn($, 'claude-haiku-5-5')
+    expect(sent[0]).toEqual({ model: 'claude-haiku-5-5', effort: 'high' })
     await footer.unmount()
+  })
+
+  test('on Haiku 4.5, which takes no effort, Auto pauses and the judge is not asked', async ($, on) => {
+    engine(on, {}, 'claude-haiku-4-5')
+    const asked = judgeSays(on, '{"haiku":"high","sonnet":"low","opus":"low","why":"simple"}')
+    await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
+    expect(asked.length).toBe(0)
   })
 
   test('the judge is told that scope counts: a short message can be a big job', async ($, on) => {
@@ -561,9 +571,11 @@ describe('footer text', () => {
 })
 
 describe('helpers', () => {
-  test('cacheSafe: effort may change on Opus 5.5 and Sonnet 5.5 only', () => {
+  test('cacheSafe: effort may change on Opus 5.5, Sonnet 5.5 and Haiku 5.5 only', () => {
     expect(cacheSafe('claude-opus-5-5')).toBe(true)
     expect(cacheSafe('claude-sonnet-5-5[1m]')).toBe(true)
+    expect(cacheSafe('claude-haiku-5-5')).toBe(true)
+    expect(cacheSafe('claude-haiku-4-5')).toBe(false)
     expect(cacheSafe('claude-fable-5-1')).toBe(false)
     expect(cacheSafe('claude-opus-4-8')).toBe(false)
     expect(cacheSafe('claude-opus-5')).toBe(false)
@@ -3323,6 +3335,16 @@ describe('agent panel', () => {
     await $.agent.spawn({ prompt: 'read relay/worker.js', description: 'read relay', subagentType: 'Explore' } as never)
     await stepOn($, 'claude-sonnet-5-5', 'medium', 'h7')
     expect(sent.map(s => s.effort)).toEqual(['medium'])
+  })
+
+  test('with Helpers on, a Haiku 5.5 subagent runs at the Haiku answer', { options: { helpers: 'on' } } as never, async ($, on) => {
+    judgeSays(on, '{"haiku":"max","sonnet":"xhigh","opus":"high","why":"a big search"}')
+    on('agent.spawn', () => ({ agentId: 'h8', model: 'claude-haiku-5-5' }) as never)
+    const sent = recordSteps(on)
+    await start($, on)
+    await $.agent.spawn({ prompt: 'map every caller of judge()', description: 'map callers', subagentType: 'Explore' } as never)
+    await stepOn($, 'claude-haiku-5-5', 'medium', 'h8')
+    expect(sent.map(s => s.effort)).toEqual(['max'])
   })
 
   test("helperFloor: medium, the person's Min when higher, never above their Max", () => {

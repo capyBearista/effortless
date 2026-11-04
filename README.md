@@ -169,7 +169,7 @@ all numbers and limits are in [bench/RESULTS.md](bench/RESULTS.md).
 
 ## Models
 
-Effort only changes on Opus 5.5 and Sonnet 5.5. On Fable 5.1 and older models a change of effort between requests rewrote most of the prompt cache, which costs more than it saves, so Auto pauses there and the footer says `Paused`. Haiku takes no effort setting.
+Effort only changes on Opus 5.5, Sonnet 5.5 and Haiku 5.5, where a change of effort keeps the prompt cache. On Fable 5.1 and older models a change of effort between requests rewrote most of the prompt cache, which costs more than it saves, so Auto pauses there and the footer says `Paused`. Haiku 4.5 takes no effort setting, so Auto pauses there too.
 
 ## Split view
 

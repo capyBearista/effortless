@@ -21,9 +21,10 @@ export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // 80k requests of real Claude Code use, cache reads are about 76% of a session's cost, cache writes 16% and output 8%: effort
 // mostly changes how many tool calls a prompt makes, not what one answer writes, so all four are counted.
 const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
-// Changing effort between two requests keeps the prompt cache on these models only. On Fable 5.1 and older Opus
-// the next request rewrote 56-100% of the cache (measured), which costs more than any effort can save.
-export const cacheSafe = (modelId: string) => /(opus|sonnet)-5-5/.test(modelId)
+// Changing effort between two requests keeps the prompt cache on these models only (Haiku 5.5 measured 2026-11-03: a
+// low -> max change read the whole cache). On Fable 5.1 and older Opus the next request rewrote 56-100% of the cache
+// (measured), which costs more than any effort can save. Haiku 4.5 takes no effort at all.
+export const cacheSafe = (modelId: string) => /(opus|sonnet|haiku)-5-5/.test(modelId)
 // The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
 let ACCENT = accent()
 /** Takes the theme the settings name; the accent and every drawing follow it. */
@@ -1062,7 +1063,7 @@ function keyOf(id: string): ModelKey | undefined {
 
 /** Records the model the session now runs; the pick follows it, so the band never shows a stale one. */
 async function modelIs($: EngineInterface, id: string) {
-  const pause = !cacheSafe(id) && keyOf(id) !== 'haiku'
+  const pause = !cacheSafe(id)
   if (pause !== (await read($, paused))) await update($, paused, () => pause)
   const key = keyOf(id)
   if (!key || key === (await read($, model))) return
@@ -2287,7 +2288,7 @@ async function choose($: EngineInterface, next: Pick | null) {
   const before = await read($, pick)
   await Promise.all([update($, pick, () => next), $.store.set('pick', next)])
   // A change Auto made is shown as "Low → High" for a moment, so the switch is seen.
-  if (next && next.by !== 'manual' && before && before.model !== 'haiku' && before.effort !== next.effort) {
+  if (next && next.by !== 'manual' && before && before.effort !== next.effort) {
     const change = { from: before.effort, to: next.effort }
     await update($, switched, () => change)
     $.clock.after(SWITCHED_MS, () => void update($, switched, () => null))
@@ -2378,7 +2379,7 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
     ? 'Auto is off: the effort stays as you set it. The power button turns Auto on.'
     : v.pausedNow
       ? 'Auto waits on this model: an effort change would rewrite its prompt cache.'
-      : !effortOf(v, v.modelNow ?? 'sonnet')
+      : !effortOf(v)
         ? 'This model runs without an effort level, so Auto has nothing to set.'
       : [
           v.current ? `Auto picked ${EFFORT_LABELS[v.current.effort]}${v.current.by !== 'manual' ? ` (${v.current.judgeName ?? v.current.by})` : ''}` : 'Auto picks the effort for each message',
@@ -2395,9 +2396,8 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
   return { effort: effortTip, cache: cacheTip }
 }
 
-/** The effort to show: yours or the judge's, else what the app itself runs with; none on Haiku. */
-function effortOf(v: Snap, inUse: ModelKey): Effort | undefined {
-  if (inUse === 'haiku') return undefined
+/** The effort to show: yours or the judge's, else what the app itself runs with. */
+function effortOf(v: Snap): Effort | undefined {
   if (v.current) return v.current.effort
   return EFFORTS.includes(v.shownByApp as Effort) ? (v.shownByApp as Effort) : undefined
 }
@@ -3077,7 +3077,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
     autoOnAt = nowMs
   }
   autoSeen = v.auto
-  const effortNow = effortOf(v, v.modelNow ?? (await sessionModel($)))
+  const effortNow = effortOf(v)
   const by = v.current?.by
   const reason = v.current
     ? `${by === 'manual' || by === 'named' ? 'You' : by === 'jev' ? (v.current.judgeName ?? 'Jev') : 'Haiku'}: ${v.current.why}`
@@ -3317,12 +3317,11 @@ async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opt
   const { Box, Text, Button } = themedEls($.ui.resolve(e))
   const v = await snap($)
   const { auto, current, judging, shownByApp } = v
-  const inUse = v.modelNow ?? (await sessionModel($))
-  const effortNow = effortOf(v, inUse)
+  const effortNow = effortOf(v)
   const setEffort = (level: Effort) => () => pickEffort($, level)
   if (e.surface !== 'terminal') return null
 
-  const notAligned = current && inUse !== 'haiku' && shownByApp && shownByApp !== current.effort
+  const notAligned = current && shownByApp && shownByApp !== current.effort
   const note = judging
     ? 'Deciding…'
     : notAligned
@@ -3797,7 +3796,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     // On a model where an effort change rewrites the cache, Auto waits instead of judging.
     const modelId = await $.session.model()
     await modelIs($, modelId)
-    if (!cacheSafe(modelId) && keyOf(modelId) !== 'haiku') return next(e)
+    if (!cacheSafe(modelId)) return next(e)
     // "go", "ok", "yes" between two steps of work keep the effort Auto already chose; no judge is asked.
     const before = await read($, pick)
     // A message with an image is never a bare follow-up: "fix this" plus a screenshot is new work.
@@ -3823,7 +3822,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
         heldPick = null
         await choose($, applied)
       }
-      await countPrompt($, inUse !== 'haiku' ? named : undefined, 'named', 0, 0)
+      await countPrompt($, named, 'named', 0, 0)
       void proof($, `named level ${named} in "${e.text.slice(0, 50)}": no judge`)
       $.ui.invalidate('ui.render')
       return next(e)
@@ -3855,7 +3854,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
         applied = { model: inUse, effort: running?.effort ?? 'medium', why: UNSURE, by: verdict.by, ...(verdict.judgeName ? { judgeName: verdict.judgeName } : {}), judged: verdict.efforts }
       }
       lastVerdictLine = verdict ? `${verdict.judgeName ?? verdict.by}: ${answersText(verdict)} -> ${applied?.effort} on ${inUse} (${applied?.why})` : 'no verdict'
-      await countPrompt($, inUse !== 'haiku' ? applied?.effort : undefined, verdict?.by, ms, judgeTokens)
+      await countPrompt($, applied?.effort, verdict?.by, ms, judgeTokens)
       void proof($, `judged in ${ms} ms: ${lastVerdictLine} for "${e.text.slice(0, 50)}"`)
       $.ui.invalidate('ui.render')
       if (applied) {
@@ -3920,7 +3919,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     // The full handoff's turn: the chat's own model at medium, whatever the last prompt was judged, Auto on or off. Not
     // on a model where an effort change rewrites the cache: on a big chat that costs more than medium saves.
     if (e.agentId === undefined && handoffEffort) {
-      if (typeof e.effort !== 'string' || keyOf(e.model) === 'haiku') return yield* send(e)
+      if (typeof e.effort !== 'string') return yield* send(e)
       if (!cacheSafe(e.model)) {
         if (e.index === 0) void proof($, `full handoff: stays at ${e.effort}, an effort change on ${e.model} rewrites the cache`)
         return yield* send(e)
@@ -3928,8 +3927,9 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       if (e.index === 0) void proof($, `full handoff: request ${e.index} (${e.model}) at ${handoffEffort}, was ${e.effort}`)
       return yield* send({ ...e, effort: handoffEffort })
     }
-    // A helper the judge read at its spawn runs every request at the answer for the model it runs on. Haiku takes no effort.
-    if (e.agentId !== undefined && config.helpers === 'on' && typeof e.effort === 'string' && keyOf(e.model) !== 'haiku') {
+    // A helper the judge read at its spawn runs every request at the answer for the model it runs on. A model that takes no
+    // effort (Haiku 4.5) sends none.
+    if (e.agentId !== undefined && config.helpers === 'on' && typeof e.effort === 'string') {
       const verdict = await helperEffortOf($, e.agentId)
       const effort = verdict ? (await helperSettled($, verdict, e.model))?.effort : undefined
       if (effort) {
@@ -3940,8 +3940,8 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       }
     }
     const p = await read($, pick)
-    // Haiku takes no effort: decided by the model this request names, never by a stored pick.
-    if (!p || keyOf(e.model) === 'haiku' || !cacheSafe(e.model)) return yield* send(e)
+    // Only where an effort change keeps the cache: decided by the model this request names, never by a stored pick.
+    if (!p || !cacheSafe(e.model)) return yield* send(e)
     // Auto off: the app's own effort goes out. A pick the judge made while Auto was on is not the person's choice, and
     // with the app already on the effort they want, the mod would never see a change to give way to.
     if (p.by !== 'manual' && !(await read($, isAuto))) return yield* send(e)
@@ -3982,7 +3982,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     const v = await snap($)
     const handoffNow = (await read($, handoffStage)) !== null
     const needsSetup = await read($, setupPending)
-    const effortNow = effortOf(v, v.modelNow ?? 'sonnet')
+    const effortNow = effortOf(v)
     // Save mode paints the level in the running-hot band's ember until the limit resets.
     const saving = (await read($, saveUntil)) !== null
     const label = v.judging
@@ -4164,7 +4164,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     if (config.hide.includes('line')) return next(e)
     const { Box, Text } = themedEls($.ui.resolve(e))
     const v = await snap($)
-    const effortNow = effortOf(v, v.modelNow ?? 'sonnet')
+    const effortNow = effortOf(v)
     const took = Math.max(1, Math.round(e.props.durationMs / 1000))
     return (
       <Box key="turn-line" flexDirection="row" gap={1}>
