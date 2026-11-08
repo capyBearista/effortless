@@ -3948,12 +3948,12 @@ describe('decision models in the settings and the guide (fork)', () => {
     await panel.unmount()
   })
 
-  test('an OpenRouter key pasted in the panel goes to ~/.config/openrouter.env, owner-only, and is used over an older one', { options: { decisionModels: MERCURY, openrouterKey: 'old-k' } } as never, async ($, on) => {
+  test('an OpenRouter key pasted in the panel goes to ~/.config/openrouter/effortless.env, owner-only, and is used over an older one', { options: { decisionModels: MERCURY, openrouterKey: 'old-k' } } as never, async ($, on) => {
     engine(on, { HOME: '/h' })
     mock.clock(on)
     toasts(on)
     configSet(on)
-    const { files, ran } = home(on, { '/h/.config/openrouter.env': 'OTHER=1\n' })
+    const { files, ran } = home(on, { '/h/.config/openrouter/effortless.env': 'OTHER=1\n' })
     judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const auth: (string | undefined)[] = []
     on('http.fetch', (_$, e) => {
@@ -3967,8 +3967,8 @@ describe('decision models in the settings and the guide (fork)', () => {
     await panel.input({ key: 'settings-or-key', text: ' or-new ' })
     await panel.press({ key: 'settings-save' })
     await panel.unmount()
-    expect(files['/h/.config/openrouter.env']).toBe('OTHER=1\nOPENROUTER_API_KEY=or-new\n')
-    expect(ran).toContainEqual(['chmod', '600', '/h/.config/openrouter.env'])
+    expect(files['/h/.config/openrouter/effortless.env']).toBe('OTHER=1\nOPENROUTER_API_KEY=or-new\n')
+    expect(ran).toContainEqual(['chmod', '600', '/h/.config/openrouter/effortless.env'])
 
     await $.prompt.submit({ text: 'refaktorera parsern', wait: false, origin: { kind: 'composer' } })
     await step($)
@@ -4023,7 +4023,7 @@ describe('decision models in the settings and the guide (fork)', () => {
     expect(await band.find({ key: 'setup-zen' })).toBeDefined()
     await band.press({ key: 'setup-openrouter' })
     await band.input({ key: 'setup-or-key', text: 'or-k' })
-    expect(files['/h/.config/openrouter.env']).toBe('OPENROUTER_API_KEY=or-k\n')
+    expect(files['/h/.config/openrouter/effortless.env']).toBe('OPENROUTER_API_KEY=or-k\n')
     await band.press({ key: 'setup-close' })
     expect(set).toContainEqual({ key: 'effortless.decisionModels', value: `${ZEN}, openrouter/typesafe/jev-1.13` })
     await band.unmount()

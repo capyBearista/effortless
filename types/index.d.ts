@@ -57,7 +57,7 @@ export type SettingsDraft = {
   decisionModels?: string
   /** Fork: what is typed in the Models part's "Other…" field, before it is added. */
   modelOther?: string
-  /** Fork: an OpenRouter key pasted in the panel; saved to ~/.config/openrouter.env, never to the settings. */
+  /** Fork: an OpenRouter key pasted in the panel; saved to ~/.config/openrouter/effortless.env, never to the settings. */
   openrouterKey?: string
   judgeTimeoutMs?: string
   judgeBudgetMs?: string

@@ -810,7 +810,7 @@ async function routeKey($: EngineInterface, route: DecisionRoute): Promise<strin
 }
 
 /** Where a pasted OpenRouter key is kept: the app's secret settings cannot be written by a plugin. */
-const OPENROUTER_FILE = '.config/openrouter.env'
+const OPENROUTER_FILE = '.config/openrouter/effortless.env'
 let askOpenRouterFile: EnvAsk | undefined
 // An OpenRouter key was saved from the panel or the guide into OPENROUTER_FILE.
 let orKeyFromFile = false
@@ -2026,7 +2026,7 @@ export function withEnvLine(text: string, name: string, value: string): string {
 }
 
 /**
- * Fork: an OpenRouter key pasted in the panel or the guide goes to ~/.config/openrouter.env, readable by its owner
+ * Fork: an OpenRouter key pasted in the panel or the guide goes to ~/.config/openrouter/effortless.env, readable by its owner
  * only. From then on that file wins over an older key in the settings. Says whether it was saved.
  */
 async function saveOpenRouterKey($: EngineInterface, key: string): Promise<boolean> {
