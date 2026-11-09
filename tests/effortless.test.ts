@@ -32,12 +32,12 @@ const BAND = {
 
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 
-type Judged3 = 'haiku' | 'sonnet' | 'opus'
+type Judged = 'haiku' | 'sonnet' | 'opus' | 'fable'
 /** A decision model's reply: its effort for each model (one level for all, or per model), sure as given. */
-const decisionReply = (effort: string | Partial<Record<Judged3, string>>, sure: number | Partial<Record<Judged3, number>> = 0.9) =>
+const decisionReply = (effort: string | Partial<Record<Judged, string>>, sure: number | Partial<Record<Judged, number>> = 0.9) =>
   JSON.stringify({
     answers: Object.fromEntries(
-      (['haiku', 'sonnet', 'opus'] as const)
+      (['haiku', 'sonnet', 'opus', 'fable'] as const)
         .map(m => [m, typeof effort === 'string' ? effort : effort[m], typeof sure === 'number' ? sure : (sure[m] ?? 0.9)] as const)
         .filter(([, choice]) => choice)
         .map(([m, choice, confidence]) => [`effort_${m}`, { choice, confidence }]),
@@ -162,6 +162,17 @@ describe('auto', () => {
     expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'low' })
   })
 
+  test('on Fable 5.1 a judged prompt applies the fable answer, and the request goes out at that effort', async ($, on) => {
+    engine(on, {}, 'claude-fable-5-1')
+    judgeSays(on, '{"haiku":"max","sonnet":"high","opus":"medium","fable":"low","why":"simple question"}')
+    const sent = recordSteps(on)
+
+    await $.prompt.submit({ text: 'vad heter mappen?', wait: false, origin: { kind: 'composer' } })
+    await stepOn($, 'claude-fable-5-1', 'xhigh')
+
+    expect(sent[0]).toEqual({ model: 'claude-fable-5-1', effort: 'low' })
+  })
+
   test('Auto switched off: the app effort goes out, not the pick the judge made while Auto was on', async ($, on) => {
     engine(on)
     on('model.complete', () => ({ value: { isAnswered: true as const, text: '{"haiku":"low","sonnet":"low","opus":"low","why":"tiny"}', usage: USAGE } }))
@@ -197,7 +208,7 @@ describe('auto', () => {
     expect(asked.length).toBe(1)
   })
 
-  test('the judge never moves a prompt to a dearer model than the chat model, nor to Fable', async ($, on) => {
+  test('the judge never moves a prompt to a dearer model than the chat model', async ($, on) => {
     engine(on, {}, 'claude-sonnet-5-5')
     judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"hard"}')
     const sent = recordSteps(on)
@@ -479,6 +490,7 @@ describe('footer text', () => {
     expect(system).toContain('Judge the scope')
     expect(system).toContain('whole drive')
     expect(system).toContain('never low')
+    expect(system).toContain('"fable":')
   })
 
   test('a thinking state while the judge decides', async ($, on) => {
@@ -571,12 +583,15 @@ describe('footer text', () => {
 })
 
 describe('helpers', () => {
-  test('cacheSafe: effort may change on Opus 5.5, Sonnet 5.5 and Haiku 5.5 only', () => {
+  test('cacheSafe: effort may change on Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.1, not on older models', () => {
     expect(cacheSafe('claude-opus-5-5')).toBe(true)
     expect(cacheSafe('claude-sonnet-5-5[1m]')).toBe(true)
     expect(cacheSafe('claude-haiku-5-5')).toBe(true)
+    expect(cacheSafe('claude-fable-5-1')).toBe(true)
+    expect(cacheSafe('claude-fable-5-1[1m]')).toBe(true)
+    expect(cacheSafe('claude-fable-5')).toBe(false)
+    expect(cacheSafe('claude-fable-5-10')).toBe(false)
     expect(cacheSafe('claude-haiku-4-5')).toBe(false)
-    expect(cacheSafe('claude-fable-5-1')).toBe(false)
     expect(cacheSafe('claude-opus-4-8')).toBe(false)
     expect(cacheSafe('claude-opus-5')).toBe(false)
   })
@@ -864,9 +879,9 @@ describe('cache countdown', () => {
 })
 
 describe('cache guard', () => {
-  test('on Fable Auto neither judges nor changes the effort, and the footer says Paused', async ($, on) => {
+  test('on Fable Auto judges the prompt, and the footer shows the level, not Paused', async ($, on) => {
     engine(on, {}, 'claude-fable-5-1')
-    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
+    const asked = judgeSays(on, '{"haiku":"max","sonnet":"high","opus":"medium","fable":"low","why":"x"}')
     const sent: unknown[] = []
     on('turn.step', async function* (_$, e) {
       sent.push(e.effort)
@@ -878,15 +893,15 @@ describe('cache guard', () => {
     for await (const _ of stream) {
       // drain
     }
-    expect(asked.length).toBe(0)
-    expect(sent).toEqual(['xhigh'])
-    expect(await drawn(footer)).toContain('"children":[" Paused "]')
+    expect(asked.length).toBe(1)
+    expect(sent).toEqual(['low'])
+    expect(await drawn(footer)).not.toContain('Paused')
     await footer.unmount()
   })
 
   test('a pick made on Opus 5.5 is not applied to a Fable request', async ($, on) => {
     engine(on)
-    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
+    judgeSays(on, '{"haiku":"max","sonnet":"high","opus":"low","fable":"high","why":"x"}')
     const sent: unknown[] = []
     on('turn.step', async function* (_$, e) {
       sent.push(e.effort)
@@ -899,7 +914,7 @@ describe('cache guard', () => {
         // drain
       }
     }
-    expect(sent).toEqual(['low', 'xhigh'])
+    expect(sent).toEqual(['low', 'high'])
   })
 })
 
@@ -1138,10 +1153,15 @@ describe('model-aware effort', () => {
     const first = bodies[0]!
     for (const b of bodies.slice(1)) expect(b).toEqual(first)
     expect(Object.keys(first.state).sort()).toEqual(['next_message', 'recent_conversation', 'task'])
-    expect(Object.keys(first.questions)).toEqual(['effort_haiku', 'effort_sonnet', 'effort_opus'])
+    expect(Object.keys(first.questions)).toEqual(['effort_haiku', 'effort_sonnet', 'effort_opus', 'effort_fable'])
     expect(first.questions.effort_opus.instructions).toContain('Opus 5.5')
+    expect(first.questions.effort_fable.instructions).toContain('Fable 5.1')
     // Each model has its own scale: the same level is described differently per model.
-    expect(first.questions.effort_haiku.criteria.max).not.toBe(first.questions.effort_opus.criteria.max)
+    expect(first.questions.effort_haiku.criteria.high).not.toBe(first.questions.effort_sonnet.criteria.high)
+    // The decision task is the tuned intro, a blank line, then the rules every judge gets (EFFORT_RULES).
+    expect(first.state.task.startsWith('Choose the reasoning effort that an agentic AI assistant should use to handle the next message')).toBe(true)
+    expect(first.state.task).toContain('\n\nJudge the scope and the amount of work, not whether it is code.')
+    expect(first.state.task.endsWith('the same task can need different levels on different models.')).toBe(true)
     expect(JSON.stringify(first)).not.toMatch(/current_|one step lower/)
   })
 
@@ -1314,8 +1334,8 @@ describe('setup guide', () => {
     expect(await drawn(band)).toContain('◉ Light')
     await band.press({ key: 'setup-next' })
 
-    // The last word: the footer's buttons and Fable; no step of ticks. Back goes to the look step.
-    expect(await drawn(band)).toContain('Auto pauses on Fable')
+    // The last word: the footer's buttons; no step of ticks. Back goes to the look step.
+    expect(await drawn(band)).toContain('Auto on or off')
     expect(await band.find({ key: 'setup-box-timer' })).toBeUndefined()
     await band.press({ key: 'setup-back' })
     expect(await drawn(band)).toContain('4/4')
@@ -2294,7 +2314,7 @@ describe('settings panel', () => {
     await band.press({ key: 'settings-card-judge' })
     await band.press({ key: 'settings-judge-test' })
     const result = async () => (await band.findAll({ type: 'Text' })).map(t => t.text).find(t => /^[✓✗]/.test(t))
-    expect(await result()).toContain('✓ jev-latest answered: haiku low 90% · sonnet low 90% · opus low 90% in')
+    expect(await result()).toContain('✓ jev-latest answered: haiku low 90% · sonnet low 90% · opus low 90% · fable low 90% in')
     status = 401
     await band.press({ key: 'settings-judge-test' })
     expect(await result()).toBe('✗ TypeSafe jev-latest rejected the key (401)')

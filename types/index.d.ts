@@ -17,7 +17,7 @@ export type Spent = {
 }
 
 /** The models the judge gives an effort for. */
-export type JudgedModel = 'haiku' | 'sonnet' | 'opus'
+export type JudgedModel = 'haiku' | 'sonnet' | 'opus' | 'fable'
 /** A judge's effort for one model, and how sure it was (0-1) when it said. */
 export type ModelAnswer = { effort: Effort; sure?: number }
 /** A judge's answers, per model, as it gave them: before the person's settings. */
