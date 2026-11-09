@@ -1,5 +1,5 @@
-// Fork: decision models (Jev and others like it) tried in order before Haiku. They all take the same body as Jev on
-// TypeSafe ({ model, state, questions }) and answer the same way, so only the address, the model id and the key differ.
+// Fork: decision models tried in order before Haiku. They all take the same body ({ model, state, questions }) and
+// answer the same way, so only the address, the model id and the key differ.
 
 export const ZEN_URL = 'https://opencode.ai/zen/v1/systemone'
 export const OPENROUTER_URL = 'https://openrouter.ai/api/alpha/decisions'
@@ -50,12 +50,15 @@ function routeOf(id: string): DecisionRoute | undefined {
   return undefined
 }
 
-/** The models the settings offer to add, each with the short name it goes by there. Any other id can be typed in. */
+/** The models the settings offer to add. Any other id can be typed in. Ordered by hit rate on decisionbench's holdout (Nov 2026). */
 export const DECISION_PRESETS: readonly { id: string }[] = [
+  { id: 'openrouter/liquid/d1-ultra' },
+  { id: 'openrouter/perplexity/pplx-decider-v1.2' },
+  { id: 'openrouter/typesafe/jev-1.14' },
+  { id: 'openrouter/baseten/elephant-1' },
+  { id: 'openrouter/parallel/decisions-fast:free' },
+  { id: 'openrouter/baseten/joey-1' },
   { id: 'opencode/jev-1.13-free' },
-  { id: 'openrouter/inception/mercury-decide:free' },
-  { id: 'openrouter/microsoft/microsoft-decision-1' },
-  { id: 'openrouter/typesafe/jev-1.13' },
   { id: 'typesafe/jev-latest' },
 ]
 
@@ -96,7 +99,7 @@ export function movedEarlier(raw: string, id: string): string {
 export function routeName(route: DecisionRoute): string {
   if (route.provider === 'zen') return `Zen ${route.model}`
   if (route.provider === 'openrouter') return `OpenRouter ${route.model}`
-  return `Jev ${route.model}`
+  return `TypeSafe ${route.model}`
 }
 
 /**

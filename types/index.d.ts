@@ -11,7 +11,7 @@ export type Spent = {
   out: number
   byEffort: Partial<Record<Effort, { prompts: number; cost: number }>>
   /** How often each judge decided, the time it took in all (ms), and its tokens. */
-  judge: { jev: number; haiku: number; ms: number; tokens: number }
+  judge: { decision: number; haiku: number; ms: number; tokens: number }
   /** Subagents the judge picked an effort for: how many per effort, their requests, and what those cost (weighted). */
   helpers: { runs: Partial<Record<Effort, number>>; requests: number; cost: number }
 }
@@ -30,12 +30,12 @@ export type Pick = {
   /** A few words on why, shown dim in the band. */
   why: string
   /** named: the person said the level in the prompt ("max effort"). */
-  by: 'jev' | 'haiku' | 'manual' | 'named'
-  /** jev only: which decision model answered, as the reason line names it (none: Jev on TypeSafe). */
+  by: 'decision' | 'haiku' | 'manual' | 'named'
+  /** decision only: which decision model answered, as the reason line names it. */
   judgeName?: string
   /** How sure the judge was of the effort, 0-1, when it said. */
   sure?: number
-  /** jev and haiku: the judge's answers for every model, so a switch to another model takes that model's own. */
+  /** decision and haiku: the judge's answers for every model, so a switch to another model takes that model's own. */
   judged?: Answers
 }
 
@@ -198,7 +198,7 @@ declare module 'claude-code' {
       /** The handoff card under the newest reply, from the start of a handoff until the reply after it lands. */
       handoffCard: { kind: 'writing' | 'done' | 'copied'; full: boolean; at: number; seen: boolean } | null
       /** The setup guide's step, or null when it is closed. */
-      setupStep: 'pick' | 'jev' | 'lean' | 'handoff' | 'done' | null
+      setupStep: 'pick' | 'decision' | 'decision-openrouter' | 'decision-typesafe' | 'lean' | 'handoff' | 'look' | 'done' | null
       /** Choices made in the setup guide, saved together at Done or the cross. */
       setupDraft: SettingsDraft
       pick: Pick | null

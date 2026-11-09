@@ -7,25 +7,24 @@
     "judge": {
       "type": "string",
       "title": "Judge",
-      "description": "Haiku (your own Claude login, no key) always judges handoffs and, unless a decision model answers, the effort. auto: the decision models as well, or with none set, Jev on TypeSafe when a TypeSafe key is set. haiku: Haiku only. jev: as auto, and the TypeSafe key may also come from ~/.config/jev/.env.",
+      "description": "Haiku (your own Claude login, no key) always judges handoffs and, unless a decision model answers, the effort. auto: the decision models first, in the order set, Haiku when none answers; with none set, Haiku alone. haiku: Haiku only.",
       "default": "auto",
       "options": [
         "auto",
-        "haiku",
-        "jev"
+        "haiku"
       ]
     },
     "typesafeKey": {
       "type": "string",
       "title": "TypeSafe API key (optional)",
-      "description": "For Jev on TypeSafe and typesafe/ decision models. Stored as a secret by Claude Code. Left empty, TYPESAFE_API_KEY is used, and with judge set to jev also ~/.config/jev/.env.",
+      "description": "For typesafe/ decision models (e.g. typesafe/jev-latest). Stored as a secret by Claude Code. Left empty, TYPESAFE_API_KEY is used, then ~/.config/jev/.env.",
       "sensitive": true,
       "default": ""
     },
     "decisionModels": {
       "type": "string",
       "title": "Decision models (fork)",
-      "description": "Tried in order before Haiku, comma-separated: opencode/<model> (OpenCode Zen, e.g. opencode/jev-1.13-free, no key), openrouter/<publisher>/<model> (OpenRouter, e.g. openrouter/typesafe/jev-1.13), typesafe/<model> (TypeSafe key). Empty: Jev on TypeSafe only, as upstream. Each call sends your next message and the last reply to that provider.",
+      "description": "Tried in order before Haiku, comma-separated: opencode/<model> (OpenCode Zen, e.g. opencode/jev-1.13-free, no key), openrouter/<publisher>/<model> (OpenRouter, e.g. openrouter/liquid/d1-ultra), typesafe/<model> (TypeSafe key). Empty: Haiku judges alone. Each call sends your next message and the last reply to that provider.",
       "default": ""
     },
     "openrouterKey": {

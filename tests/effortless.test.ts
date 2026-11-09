@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, judgeFailure, contextFrom, readConfig, timingWarnings, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, tipped, bounded, handoffEvidence, parseHandoffAnswer, withTypesafeKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, judgeFailure, contextFrom, readConfig, timingWarnings, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseDecisionAnswer, parseTypesafeKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { hopTimeout, MAX_ROUTES, movedEarlier, parseDecisionModels, routeLabel, routeShortName, withoutRoute, withRoute } from '../hooks/decisions'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
@@ -34,7 +34,7 @@ const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, c
 
 type Judged3 = 'haiku' | 'sonnet' | 'opus'
 /** A decision model's reply: its effort for each model (one level for all, or per model), sure as given. */
-const jevReply = (effort: string | Partial<Record<Judged3, string>>, sure: number | Partial<Record<Judged3, number>> = 0.9) =>
+const decisionReply = (effort: string | Partial<Record<Judged3, string>>, sure: number | Partial<Record<Judged3, number>> = 0.9) =>
   JSON.stringify({
     answers: Object.fromEntries(
       (['haiku', 'sonnet', 'opus'] as const)
@@ -219,7 +219,7 @@ describe('auto', () => {
     expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'high' })
   })
 
-  test('Jev on TypeSafe decides when TYPESAFE_API_KEY is set, with typed questions, and Haiku is not asked', async ($, on) => {
+  test('a typesafe/ decision model decides when TYPESAFE_API_KEY is set, with typed questions, and Haiku is not asked', { options: { decisionModels: 'typesafe/jev-latest' } } as never, async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)
     const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
@@ -230,7 +230,7 @@ describe('auto', () => {
         auth: (e.init?.headers as Record<string, string> | undefined)?.authorization,
         body: JSON.parse(String(e.init?.body)),
       })
-      return { value: { status: 200, ok: true, headers: {}, text: jevReply('max') } }
+      return { value: { status: 200, ok: true, headers: {}, text: decisionReply('max') } }
     })
     const sent = recordSteps(on)
 
@@ -248,7 +248,7 @@ describe('auto', () => {
     expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'max' })
   })
 
-  test('with the jev judge picked, the TypeSafe key is read from ~/.config/jev/.env when the environment has none', { options: { judge: 'jev' } } as never, async ($, on) => {
+  test('with judge auto and a typesafe/ decision model, the TypeSafe key is read from ~/.config/jev/.env when the environment has none', { options: { judge: 'auto', decisionModels: 'typesafe/jev-latest' } } as never, async ($, on) => {
     engine(on, { USERPROFILE: '/Users/x' })
     mock.clock(on)
     const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
@@ -260,7 +260,7 @@ describe('auto', () => {
     const auth: (string | undefined)[] = []
     on('http.fetch', (_$, e) => {
       auth.push((e.init?.headers as Record<string, string> | undefined)?.authorization)
-      return { value: { status: 200, ok: true, headers: {}, text: jevReply('high') } }
+      return { value: { status: 200, ok: true, headers: {}, text: decisionReply('high') } }
     })
     await $.prompt.submit({ text: 'hard task', wait: false, origin: { kind: 'composer' } })
     expect(read.map(path => path.replaceAll('\\', '/'))).toEqual(['/Users/x/.config/jev/.env'])
@@ -581,29 +581,29 @@ describe('helpers', () => {
     expect(cacheSafe('claude-opus-5')).toBe(false)
   })
 
-  test('parseJevKey reads the key line, quoted or not, and nothing else', () => {
-    expect(parseJevKey('TYPESAFE_API_KEY=abc')).toBe('abc')
-    expect(parseJevKey('X=1\n  TYPESAFE_API_KEY = "q w" \n')).toBe('q w')
-    expect(parseJevKey('TYPESAFE_API_KEY=')).toBeUndefined()
-    expect(parseJevKey('OTHER=1')).toBeUndefined()
+  test('parseTypesafeKey reads the key line, quoted or not, and nothing else', () => {
+    expect(parseTypesafeKey('TYPESAFE_API_KEY=abc')).toBe('abc')
+    expect(parseTypesafeKey('X=1\n  TYPESAFE_API_KEY = "q w" \n')).toBe('q w')
+    expect(parseTypesafeKey('TYPESAFE_API_KEY=')).toBeUndefined()
+    expect(parseTypesafeKey('OTHER=1')).toBeUndefined()
   })
 
-  test('parseJevAnswer: each model\'s choice and confidence as given, unsure ones too; a bad entry is left out; junk is nothing', () => {
-    const v = parseJevAnswer(jevReply({ haiku: 'max', sonnet: 'high', opus: 'medium' }, { opus: 0.4 }))
+  test('parseDecisionAnswer: each model\'s choice and confidence as given, unsure ones too; a bad entry is left out; junk is nothing', () => {
+    const v = parseDecisionAnswer(decisionReply({ haiku: 'max', sonnet: 'high', opus: 'medium' }, { opus: 0.4 }))
     expect(v?.efforts).toEqual({ haiku: { effort: 'max', sure: 0.9 }, sonnet: { effort: 'high', sure: 0.9 }, opus: { effort: 'medium', sure: 0.4 } })
-    expect(v?.by).toBe('jev')
-    expect(parseJevAnswer(jevReply({ haiku: 'turbo', opus: 'low' }))?.efforts).toEqual({ opus: { effort: 'low', sure: 0.9 } })
-    expect(parseJevAnswer(jevReply('turbo'))).toBeUndefined()
-    expect(parseJevAnswer('nope')).toBeUndefined()
+    expect(v?.by).toBe('decision')
+    expect(parseDecisionAnswer(decisionReply({ haiku: 'turbo', opus: 'low' }))?.efforts).toEqual({ opus: { effort: 'low', sure: 0.9 } })
+    expect(parseDecisionAnswer(decisionReply('turbo'))).toBeUndefined()
+    expect(parseDecisionAnswer('nope')).toBeUndefined()
     // No confidence: the choice's own probability stands in.
     const probs = JSON.stringify({ answers: { effort_opus: { choice: 'low', probabilities: { low: 0.62, medium: 0.38 } } } })
-    expect(parseJevAnswer(probs)?.efforts.opus).toEqual({ effort: 'low', sure: 0.62 })
+    expect(parseDecisionAnswer(probs)?.efforts.opus).toEqual({ effort: 'low', sure: 0.62 })
   })
 
-  test('parseJevAnswer reads the answers under answers, under result.answers, or at the top level', () => {
+  test('parseDecisionAnswer reads the answers under answers, under result.answers, or at the top level', () => {
     const one = { effort_sonnet: { choice: 'high', confidence: 0.7 } }
     for (const body of [{ answers: one }, { result: { answers: one } }, one]) {
-      expect(parseJevAnswer(JSON.stringify(body))?.efforts.sonnet).toEqual({ effort: 'high', sure: 0.7 })
+      expect(parseDecisionAnswer(JSON.stringify(body))?.efforts.sonnet).toEqual({ effort: 'high', sure: 0.7 })
     }
   })
 
@@ -669,7 +669,7 @@ describe('named level', () => {
 describe('state from an older version', () => {
   test('the pre-0.2.0 tally { requests, actual, baseline } reads as an empty tally, never throws', () => {
     const old = { requests: 3, actual: 900, baseline: 1500 } as never
-    expect(asSpent(old).judge).toEqual({ jev: 0, haiku: 0, ms: 0, tokens: 0 })
+    expect(asSpent(old).judge).toEqual({ decision: 0, haiku: 0, ms: 0, tokens: 0 })
     expect(asSpent(old).byEffort).toEqual({})
     expect(() => savedText(old)).not.toThrow()
     expect(asSpent(undefined).prompts).toBe(0)
@@ -948,32 +948,6 @@ describe('band', () => {
 })
 
 describe('review fixes', () => {
-  test('a Jev endpoint that never answers holds the prompt only for the timeout, then Haiku judges', async ($, on) => {
-    engine(on, { TYPESAFE_API_KEY: 'k' })
-    const mocked = mock.clock(on)
-    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
-    on('http.fetch', () => new Promise(() => undefined) as never)
-    const sent = recordSteps(on)
-
-    const submitted = $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    await mocked.advance(3500)
-    await submitted
-    await step($, 'high')
-
-    expect(asked.length).toBe(1)
-    expect(sent[0].effort).toBe('low')
-  })
-
-  test('Jev answering with an error status falls through to Haiku', async ($, on) => {
-    engine(on, { TYPESAFE_API_KEY: 'k' })
-    mock.clock(on)
-    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
-    on('http.fetch', () => ({ value: { status: 500, ok: false, headers: {}, text: 'boom' } }))
-
-    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
-    expect(asked.length).toBe(1)
-  })
-
   test('a model switch that changes the engine effort is not read as you choosing, Auto stays on', async ($, on) => {
     engine(on)
     judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"simple"}')
@@ -1010,7 +984,7 @@ describe('judge choice (plugin settings)', () => {
     expect(readConfig({ judge: 'gpt' }).judge).toBe('auto')
     // The Custom judge is gone: a saved 'custom' reads as auto.
     expect(readConfig({ judge: 'custom' }).judge).toBe('auto')
-    expect(readConfig({ judge: ' jev ' }).judge).toBe('jev')
+    expect(readConfig({ judge: ' haiku ' }).judge).toBe('haiku')
     expect(readConfig({})).toEqual({
       judge: 'auto',
       typesafeKey: '',
@@ -1054,13 +1028,13 @@ describe('judge choice (plugin settings)', () => {
     expect(asked.length).toBe(1)
   })
 
-  test('jev: the key from the settings is used before the environment', { options: { judge: 'jev', typesafeKey: 'from-settings' } } as never, async ($, on) => {
+  test('a typesafe/ decision model uses the key from the settings before the environment', { options: { decisionModels: 'typesafe/jev-latest', typesafeKey: 'from-settings' } } as never, async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'from-env' })
     mock.clock(on)
     const auth: (string | undefined)[] = []
     on('http.fetch', (_$, e) => {
       auth.push((e.init?.headers as Record<string, string> | undefined)?.authorization)
-      return { value: { status: 200, ok: true, headers: {}, text: jevReply('high') } }
+      return { value: { status: 200, ok: true, headers: {}, text: decisionReply('high') } }
     })
     await $.prompt.submit({ text: 'hard task here', wait: false, origin: { kind: 'composer' } })
     expect(auth).toEqual(['Bearer from-settings'])
@@ -1140,7 +1114,7 @@ describe('model-aware effort', () => {
     expect(first.system).toContain('"haiku"')
   })
 
-  test('a decision model gets the same body whatever effort was in force and whatever model runs, with a question per model', async ($, on) => {
+  test('a decision model gets the same body whatever effort was in force and whatever model runs, with a question per model', { options: { decisionModels: 'typesafe/jev-latest' } } as never, async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)
     on('classic.PostModelSwitch', () => ({}) as never)
@@ -1148,7 +1122,7 @@ describe('model-aware effort', () => {
     let says = 'low'
     on('http.fetch', (_$, e) => {
       bodies.push(JSON.parse(String(e.init?.body)))
-      return { value: { status: 200, ok: true, headers: {}, text: jevReply(says) } }
+      return { value: { status: 200, ok: true, headers: {}, text: decisionReply(says) } }
     })
     recordSteps(on)
     const ask = async () => {
@@ -1211,7 +1185,7 @@ describe('model-aware effort', () => {
 })
 
 describe('keys', () => {
-  test('auto never opens ~/.config/jev/.env: it judges with Haiku', async ($, on) => {
+  test('without a typesafe/ decision model, ~/.config/jev/.env is never opened: Haiku judges', async ($, on) => {
     engine(on, { USERPROFILE: 'C:/Users/x' })
     mock.clock(on)
     const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
@@ -1277,17 +1251,17 @@ describe('setup guide', () => {
 
   test('the steps run judge, lean, handoff, done; Back goes one step back', () => {
     expect(setupNext('pick')).toBe('lean')
-    expect(setupNext('jev')).toBe('lean')
+    expect(setupNext('decision')).toBe('lean')
     expect(setupNext('lean')).toBe('handoff')
     expect(setupNext('handoff')).toBe('look')
     expect(setupNext('look')).toBe('done')
     expect(setupNext('done')).toBeNull()
     expect(setupBack('pick')).toBeNull()
-    expect(setupBack('jev')).toBe('pick')
+    expect(setupBack('decision')).toBe('pick')
     expect(setupBack('lean')).toBe('pick')
     expect(setupBack('look')).toBe('handoff')
     expect(setupBack('done')).toBe('look')
-    expect(setupCounter('jev')).toBe('1/4')
+    expect(setupCounter('decision')).toBe('1/4')
     expect(setupCounter('handoff')).toBe('3/4')
     expect(setupCounter('look')).toBe('4/4')
     expect(setupCounter('done')).toBe('')
@@ -1361,19 +1335,19 @@ describe('setup guide', () => {
     await expect($.ui.mount(DESK)).rejects.toThrow()
     await $.command.run({ command: 'effortless', args: 'setup' })
     const again = await $.ui.mount(DESK)
-    expect(await again.find({ key: 'setup-jev' })).toBeDefined()
+    expect(await again.find({ key: 'setup-decision' })).toBeDefined()
     await again.unmount()
   })
 
-  test('Jev without a key asks for it in the band; Skip goes on to the lean, Back returns to the pick', async ($, on) => {
+  test('a decision model without a key asks for it in the band; Skip goes on to the lean, Back returns to the pick', async ($, on) => {
     engine(on)
     mock.clock(on)
     const set = settings(on)
     await start($, on)
     const band = await $.ui.mount(DESK)
-    await band.press({ key: 'setup-jev' })
-    // Fork: first where Jev runs; the TypeSafe key is one of three.
-    expect(await drawn(band)).toContain('Where should Jev run?')
+    await band.press({ key: 'setup-decision' })
+    // Fork: first where the decision model runs; the TypeSafe key is one of three.
+    expect(await drawn(band)).toContain('Where should the decision model run?')
     await band.press({ key: 'setup-typesafe' })
     expect(set).toEqual([])
     expect(await drawn(band)).toContain('typesafe.ai')
@@ -1382,10 +1356,10 @@ describe('setup guide', () => {
     await band.press({ key: 'setup-skip' })
     expect(await band.find({ key: 'setup-bias2' })).toBeDefined()
     await band.press({ key: 'setup-back' })
-    expect(await band.find({ key: 'setup-jev' })).toBeDefined()
+    expect(await band.find({ key: 'setup-decision' })).toBeDefined()
     // The cross keeps what was picked so far.
     await band.press({ key: 'setup-close' })
-    expect(set).toEqual([{ key: 'effortless.judge', value: 'jev' }])
+    expect(set).toEqual([])
     await band.unmount()
   })
 
@@ -1406,17 +1380,18 @@ describe('setup guide', () => {
     await footer.unmount()
   })
 
-  test('Jev with a key already in the environment needs no second step', async ($, on) => {
+  test('a TypeSafe key already in the environment adds typesafe/jev-latest with no second step', async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)
-    settings(on)
+    const set = settings(on)
     const said = toasts(on)
     await start($, on)
     const band = await $.ui.mount(DESK)
-    await band.press({ key: 'setup-jev' })
-    expect(said.join(' ')).toContain('Jev judges')
+    await band.press({ key: 'setup-decision' })
+    expect(said.join(' ')).toContain('typesafe/jev-latest is a decision model now')
     expect(await drawn(band)).toContain('2/4')
     await band.press({ key: 'setup-close' })
+    expect(set).toContainEqual({ key: 'effortless.decisionModels', value: 'typesafe/jev-latest' })
     await band.unmount()
     await expect($.ui.mount(DESK)).rejects.toThrow()
   })
@@ -1424,13 +1399,13 @@ describe('setup guide', () => {
 
 describe('judge failures are said', () => {
   test('judgeFailure names the cause', () => {
-    expect(judgeFailure('Jev', 402)).toContain('out of credits')
-    expect(judgeFailure('Jev', 429)).toContain('rate limited')
-    expect(judgeFailure('Jev', 401)).toContain('rejected the key')
-    expect(judgeFailure('Jev', 'timeout')).toContain('did not answer')
+    expect(judgeFailure('Decision model', 402)).toContain('out of credits')
+    expect(judgeFailure('Decision model', 429)).toContain('rate limited')
+    expect(judgeFailure('Decision model', 401)).toContain('rejected the key')
+    expect(judgeFailure('Decision model', 'timeout')).toContain('did not answer')
   })
 
-  test('Jev out of credits: the person is told once, and Haiku judges', async ($, on) => {
+  test('a decision model out of credits: the person is told once, and Haiku judges', { options: { decisionModels: 'typesafe/jev-latest' } } as never, async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)
     const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
@@ -1471,14 +1446,6 @@ describe('short answers to a question', () => {
     expect(asked.length).toBe(2)
   })
 
-  test('Jev unsure: Haiku makes the call', async ($, on) => {
-    engine(on, { TYPESAFE_API_KEY: 'k' }, 'claude-sonnet-5-5')
-    mock.clock(on)
-    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
-    on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: jevReply('high', 0.3) } }))
-    await $.prompt.submit({ text: 'show me the last five commits please', wait: false, origin: { kind: 'composer' } })
-    expect(asked.length).toBe(1)
-  })
 })
 
 describe('images', () => {
@@ -2209,7 +2176,7 @@ describe('swamp band and setup entry', () => {
     expect(await footer.find({ key: 'setup' })).toBeDefined()
     await footer.press({ key: 'setup' })
     const reopened = await $.ui.mount(DESK_BAND)
-    expect(await reopened.find({ key: 'setup-jev' })).toBeDefined()
+    expect(await reopened.find({ key: 'setup-decision' })).toBeDefined()
     await reopened.press({ key: 'setup-haiku' })
     await reopened.press({ key: 'setup-close' })
     await reopened.unmount()
@@ -2264,13 +2231,13 @@ describe('running hot and judge down', () => {
     await band.unmount()
   })
 
-  test('a failing judge shows the judge-down band until it answers again', async ($, on) => {
+  test('a failing judge shows the judge-down band until it answers again', { options: { decisionModels: 'typesafe/jev-latest' } } as never, async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)
     judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     let status = 402
     on('http.fetch', () => ({ value: status === 200
-      ? { status: 200, ok: true, headers: {}, text: jevReply('high', 0.9) }
+      ? { status: 200, ok: true, headers: {}, text: decisionReply('high', 0.9) }
       : { status, ok: false, headers: {}, text: 'payment required' } }))
     on('ui.toast', () => ({ value: undefined }) as never)
     await start($, on)
@@ -2308,7 +2275,7 @@ describe('settings panel', () => {
     await ui.unmount()
   })
 
-  test('Test asks the picked judge one sample and says if it answered, or why not', { options: { layout: 'default' } } as never, async ($, on) => {
+  test('Test asks the picked judge one sample and says if it answered, or why not', { options: { layout: 'default', decisionModels: 'typesafe/jev-latest' } } as never, async ($, on) => {
     engine(on, { TYPESAFE_API_KEY: 'k' })
     mock.clock(on)
     let status = 200
@@ -2317,7 +2284,7 @@ describe('settings panel', () => {
       toasts.push(String(e))
       return { value: undefined } as never
     })
-    on('http.fetch', () => ({ value: { status, ok: status === 200, headers: {}, text: status === 200 ? jevReply('low') : 'no' } }))
+    on('http.fetch', () => ({ value: { status, ok: status === 200, headers: {}, text: status === 200 ? decisionReply('low') : 'no' } }))
     await start($, on)
     const guide = await $.ui.mount(DESK_BAND)
     await guide.press({ key: 'setup-close' })
@@ -2325,13 +2292,12 @@ describe('settings panel', () => {
     const band = await $.ui.mount(DESK_BAND)
     await band.press({ key: 'dash-settings' })
     await band.press({ key: 'settings-card-judge' })
-    await band.select({ key: 'settings-judge-pick', value: 'jev' })
     await band.press({ key: 'settings-judge-test' })
     const result = async () => (await band.findAll({ type: 'Text' })).map(t => t.text).find(t => /^[✓✗]/.test(t))
-    expect(await result()).toContain('✓ Jev answered: haiku low 90% · sonnet low 90% · opus low 90% in')
+    expect(await result()).toContain('✓ jev-latest answered: haiku low 90% · sonnet low 90% · opus low 90% in')
     status = 401
     await band.press({ key: 'settings-judge-test' })
-    expect(await result()).toBe('✗ Jev rejected the key (401)')
+    expect(await result()).toBe('✗ TypeSafe jev-latest rejected the key (401)')
     // A test warns nobody: no toast, no judge-down band.
     expect(toasts).toEqual([])
     await band.unmount()
@@ -2353,12 +2319,12 @@ describe('settings panel', () => {
     expect(tipped('medium', undefined, 2)).toBe('medium')
     expect(bounded('low', 'medium', 'max')).toBe('medium')
     expect(bounded('max', 'low', 'high')).toBe('high')
-    expect(withJevKey('A=1\nTYPESAFE_API_KEY=old\n', 'new')).toBe('A=1\nTYPESAFE_API_KEY=new\n')
-    expect(withJevKey('A=1', 'new')).toBe('A=1\nTYPESAFE_API_KEY=new\n')
+    expect(withTypesafeKey('A=1\nTYPESAFE_API_KEY=old\n', 'new')).toBe('A=1\nTYPESAFE_API_KEY=new\n')
+    expect(withTypesafeKey('A=1', 'new')).toBe('A=1\nTYPESAFE_API_KEY=new\n')
     expect(parseVerdict('{"haiku":"high","sonnet":"high","opus":"high","sure":0.7,"why":"x"}')?.efforts.opus?.sure).toBe(0.7)
   })
 
-  test('Open settings opens the panel; the slider, range and key are saved from it', async ($, on) => {
+  test('Open settings opens the panel; the slider, range and key are saved from it', { options: { decisionModels: 'typesafe/jev-latest' } } as never, async ($, on) => {
     engine(on, { USERPROFILE: '/Users/x' })
     const mocked = mock.clock(on)
     const set: { key: string; value: unknown }[] = []
@@ -2425,7 +2391,6 @@ describe('settings panel', () => {
     expect(set).toContainEqual({ key: 'effortless.handoffSkill', value: 'session-handoff' })
     expect(set).toContainEqual({ key: 'effortless.effortBias', value: '1' })
     expect(set).toContainEqual({ key: 'effortless.effortFloor', value: 'medium' })
-    expect(set).toContainEqual({ key: 'effortless.judge', value: 'jev' })
     expect(set).toContainEqual({ key: 'effortless.helpers', value: 'on' })
     expect(said.join(' | ')).toContain('key saved')
     expect(files['/Users/x/.config/jev/.env']).toBe('OTHER=1\nTYPESAFE_API_KEY=tk-new\n')
@@ -2796,10 +2761,10 @@ describe('dashboard', () => {
   })
 
   test("its lines: the effort, cache and context; the judge's reason and the last reply", () => {
-    const base = { auto: true, paused: false, judging: false, effort: 'medium' as const, cacheNow: 42, contextPercent: 18, reason: 'Jev: a small fix', last: null }
+    const base = { auto: true, paused: false, judging: false, effort: 'medium' as const, cacheNow: 42, contextPercent: 18, reason: 'Decision model: a small fix', last: null }
     expect(dashboardLines(base).head).toBe(`✦ Medium · cache ${cacheLabel(42)} · 18% context`)
-    expect(dashboardLines(base).detail).toBe('Jev: a small fix')
-    expect(dashboardLines({ ...base, last: { cost: 42_000, ms: 38_200 } }).detail).toBe('Jev: a small fix · last reply ≈42.0k tokens · 38s')
+    expect(dashboardLines(base).detail).toBe('Decision model: a small fix')
+    expect(dashboardLines({ ...base, last: { cost: 42_000, ms: 38_200 } }).detail).toBe('Decision model: a small fix · last reply ≈42.0k tokens · 38s')
     expect(dashboardLines({ ...base, auto: false }).head).toBe(`✦ Off · cache ${cacheLabel(42)} · 18% context`)
     expect(dashboardLines({ ...base, cacheNow: null, contextPercent: null }).head).toBe('✦ Medium')
     expect(weighted({ input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 1000, cache_creation_input_tokens: 4 })).toBe(10 + 10 + 100 + 5)
@@ -3335,7 +3300,7 @@ describe('agent panel', () => {
 
   test('with Helpers on, a decision model unsure for the subagent\'s model leaves it at the chat\'s effort, and Haiku is not asked', { options: { helpers: 'on', decisionModels: 'opencode/jev-1.13-free' } } as never, async ($, on) => {
     const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
-    on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: jevReply({ sonnet: 'xhigh', opus: 'xhigh' }, { sonnet: 0.3 }) } }))
+    on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: decisionReply({ sonnet: 'xhigh', opus: 'xhigh' }, { sonnet: 0.3 }) } }))
     on('agent.spawn', () => ({ agentId: 'h6', model: 'claude-sonnet-5-5' }) as never)
     const sent = recordSteps(on)
     await start($, on)
@@ -3368,7 +3333,7 @@ describe('agent panel', () => {
 
   test('with Helpers on, a decision model\'s helper pick says how sure it was', { options: { helpers: 'on', decisionModels: 'opencode/jev-1.13-free' } } as never, async ($, on) => {
     judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
-    on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: jevReply('high', 0.7) } }))
+    on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: decisionReply('high', 0.7) } }))
     on('agent.spawn', () => ({ agentId: 'h9', model: 'claude-opus-5-5' }) as never)
     on('turn.complete', () => ({ text: '' }))
     await start($, on)
@@ -3639,7 +3604,7 @@ describe('decision models (fork)', () => {
     mock.clock(on)
     judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     toasts(on)
-    decisions(on, () => ({ status: 200, text: jevReply('max') }))
+    decisions(on, () => ({ status: 200, text: decisionReply('max') }))
     on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
     on('command.register', () => ({ value: undefined }) as never)
     await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
@@ -3673,7 +3638,7 @@ describe('decision models (fork)', () => {
     mock.clock(on)
     const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
     const said = toasts(on)
-    const calls = decisions(on, url => (url.includes('opencode.ai') ? { status: 500, text: 'down' } : { status: 200, text: jevReply('max') }))
+    const calls = decisions(on, url => (url.includes('opencode.ai') ? { status: 500, text: 'down' } : { status: 200, text: decisionReply('max') }))
     const sent = recordSteps(on)
 
     await $.prompt.submit({ text: 'designa om hela relayn', wait: false, origin: { kind: 'composer' } })
@@ -3697,7 +3662,7 @@ describe('decision models (fork)', () => {
     engine(on)
     mock.clock(on)
     judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
-    const calls = decisions(on, () => ({ status: 200, text: jevReply('low') }))
+    const calls = decisions(on, () => ({ status: 200, text: decisionReply('low') }))
     const sent = recordSteps(on)
 
     await $.prompt.submit({ text: 'byt namn på en variabel', wait: false, origin: { kind: 'composer' } })
@@ -3711,7 +3676,7 @@ describe('decision models (fork)', () => {
     engine(on, { OPENROUTER_API_KEY: 'env-k' })
     mock.clock(on)
     judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
-    const calls = decisions(on, () => ({ status: 200, text: jevReply('high') }))
+    const calls = decisions(on, () => ({ status: 200, text: decisionReply('high') }))
     recordSteps(on)
 
     await $.prompt.submit({ text: 'refaktorera parsern', wait: false, origin: { kind: 'composer' } })
@@ -3742,7 +3707,7 @@ describe('decision models (fork)', () => {
     engine(on)
     mock.clock(on)
     const asked = judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"x"}')
-    const calls = decisions(on, () => ({ status: 200, text: jevReply('low', 0.3) }))
+    const calls = decisions(on, () => ({ status: 200, text: decisionReply('low', 0.3) }))
     recordSteps(on)
 
     await $.prompt.submit({ text: 'kanske', wait: false, origin: { kind: 'composer' } })
@@ -3756,7 +3721,7 @@ describe('decision models (fork)', () => {
     engine(on)
     mock.clock(on)
     const asked = judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"x"}')
-    decisions(on, () => ({ status: 200, text: jevReply({ haiku: 'max', sonnet: 'xhigh', opus: 'low' }, { sonnet: 0.2 }) }))
+    decisions(on, () => ({ status: 200, text: decisionReply({ haiku: 'max', sonnet: 'xhigh', opus: 'low' }, { sonnet: 0.2 }) }))
     const sent = recordSteps(on)
     await $.prompt.submit({ text: 'kanske', wait: false, origin: { kind: 'composer' } })
     await step($)
@@ -3768,12 +3733,12 @@ describe('decision models (fork)', () => {
     engine(on)
     mock.clock(on)
     on('model.complete', () => ({ value: { isAnswered: false as const } }) as never)
-    let says = jevReply('high', 0.95)
+    let says = decisionReply('high', 0.95)
     decisions(on, () => ({ status: 200, text: says }))
     const sent = recordSteps(on)
     await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
     await step($)
-    says = jevReply('low', 0.3)
+    says = decisionReply('low', 0.3)
     await $.prompt.submit({ text: 'and what about the lexer', wait: false, origin: { kind: 'composer' } })
     await step($)
     expect(sent.map(s => s.effort)).toEqual(['high', 'high'])
@@ -3786,7 +3751,7 @@ describe('decision models (fork)', () => {
     engine(on)
     mock.clock(on)
     on('model.complete', () => ({ value: { isAnswered: false as const } }) as never)
-    decisions(on, () => ({ status: 200, text: jevReply('low', 0.3) }))
+    decisions(on, () => ({ status: 200, text: decisionReply('low', 0.3) }))
     const sent = recordSteps(on)
     await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
     await step($, 'medium')
@@ -3798,7 +3763,7 @@ describe('decision models (fork)', () => {
     mock.clock(on)
     on('classic.PostModelSwitch', () => ({}) as never)
     on('model.complete', () => ({ value: { isAnswered: false as const } }) as never)
-    decisions(on, () => ({ status: 200, text: jevReply({ sonnet: 'xhigh', opus: 'low' }, { sonnet: 0.8, opus: 0.3 }) }))
+    decisions(on, () => ({ status: 200, text: decisionReply({ sonnet: 'xhigh', opus: 'low' }, { sonnet: 0.8, opus: 0.3 }) }))
     const sent = recordSteps(on)
     await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
     await $.classic.PostModelSwitch({ from_model: 'claude-opus-5-5', to_model: 'claude-sonnet-5-5', requested_model: null, source: 'picker', context_tokens: 0 } as never)
@@ -3816,7 +3781,7 @@ describe('decision models (fork)', () => {
     engine(on)
     mock.clock(on)
     const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
-    const calls = decisions(on, () => ({ status: 200, text: jevReply('max') }))
+    const calls = decisions(on, () => ({ status: 200, text: decisionReply('max') }))
     recordSteps(on)
 
     await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
@@ -3866,7 +3831,7 @@ describe('decision models in the settings and the guide (fork)', () => {
     return $.ui.mount(DESK_BAND)
   }
   const ZEN = 'opencode/jev-1.13-free'
-  const MERCURY = 'openrouter/inception/mercury-decide:free'
+  const LIQUID = 'openrouter/liquid/d1-ultra'
 
   test('a setting saved from the panel keeps the decision models: the next prompt still goes to Zen', { options: { decisionModels: ZEN } } as never, async ($, on) => {
     engine(on)
@@ -3877,7 +3842,7 @@ describe('decision models in the settings and the guide (fork)', () => {
     const urls: string[] = []
     on('http.fetch', (_$, e) => {
       urls.push(e.url)
-      return { value: { status: 200, ok: true, headers: {}, text: jevReply('high') } }
+      return { value: { status: 200, ok: true, headers: {}, text: decisionReply('high') } }
     })
     recordSteps(on)
     await start($, on)
@@ -3910,21 +3875,21 @@ describe('decision models in the settings and the guide (fork)', () => {
     await panel.press({ key: 'settings-models-open' })
     expect(await drawn(panel)).toContain('Judge ›')
     expect(await drawn(panel)).toContain('OpenCode')
-    await panel.select({ key: 'settings-model-add', value: MERCURY })
-    expect(await drawn(panel)).toContain('2 inception/mercury-decide:free')
+    await panel.select({ key: 'settings-model-add', value: LIQUID })
+    expect(await drawn(panel)).toContain('2 liquid/d1-ultra')
     expect(await drawn(panel)).toContain('OpenRouter')
-    await panel.press({ key: `model-earlier-${MERCURY}` })
-    expect(await drawn(panel)).toContain('1 inception/mercury-decide:free')
+    await panel.press({ key: `model-earlier-${LIQUID}` })
+    expect(await drawn(panel)).toContain('1 liquid/d1-ultra')
     await panel.press({ key: `model-remove-${ZEN}` })
     expect(await panel.find({ key: `model-chip-${ZEN}` })).toBeUndefined()
     await panel.select({ key: 'settings-model-each', value: '3000' })
     // Back goes to the Judge part, which now asks for the OpenRouter key.
     await panel.press({ key: 'settings-back' })
-    expect(await drawn(panel)).toContain('inception/mercury-decide:free → Haiku')
+    expect(await drawn(panel)).toContain('liquid/d1-ultra → Haiku')
     expect(await panel.find({ key: 'settings-or-key' })).toBeDefined()
     expect(set).toEqual([])
     await panel.press({ key: 'settings-save' })
-    expect(set).toContainEqual({ key: 'effortless.decisionModels', value: MERCURY })
+    expect(set).toContainEqual({ key: 'effortless.decisionModels', value: LIQUID })
     expect(set).toContainEqual({ key: 'effortless.judgeTimeoutMs', value: '3000' })
     await panel.unmount()
   })
@@ -3948,7 +3913,7 @@ describe('decision models in the settings and the guide (fork)', () => {
     await panel.unmount()
   })
 
-  test('an OpenRouter key pasted in the panel goes to ~/.config/openrouter/effortless.env, owner-only, and is used over an older one', { options: { decisionModels: MERCURY, openrouterKey: 'old-k' } } as never, async ($, on) => {
+  test('an OpenRouter key pasted in the panel goes to ~/.config/openrouter/effortless.env, owner-only, and is used over an older one', { options: { decisionModels: LIQUID, openrouterKey: 'old-k' } } as never, async ($, on) => {
     engine(on, { HOME: '/h' })
     mock.clock(on)
     toasts(on)
@@ -3958,7 +3923,7 @@ describe('decision models in the settings and the guide (fork)', () => {
     const auth: (string | undefined)[] = []
     on('http.fetch', (_$, e) => {
       auth.push((e.init?.headers as Record<string, string> | undefined)?.authorization)
-      return { value: { status: 200, ok: true, headers: {}, text: jevReply('high') } }
+      return { value: { status: 200, ok: true, headers: {}, text: decisionReply('high') } }
     })
     recordSteps(on)
     await start($, on)
@@ -3980,7 +3945,7 @@ describe('decision models in the settings and the guide (fork)', () => {
     mock.clock(on)
     toasts(on)
     on('http.fetch', (_$, e) =>
-      e.url.includes('openrouter') ? { value: { status: 404, ok: false, headers: {}, text: 'no' } } : { value: { status: 200, ok: true, headers: {}, text: jevReply('low') } })
+      e.url.includes('openrouter') ? { value: { status: 404, ok: false, headers: {}, text: 'no' } } : { value: { status: 200, ok: true, headers: {}, text: decisionReply('low') } })
     await start($, on)
     const panel = await openPanel($)
     await panel.press({ key: 'settings-card-judge' })
@@ -3998,8 +3963,8 @@ describe('decision models in the settings and the guide (fork)', () => {
     const set = configSet(on)
     await start($, on)
     const band = await $.ui.mount(DESK_BAND)
-    await band.press({ key: 'setup-jev' })
-    expect(await drawn(band)).toContain('Where should Jev run?')
+    await band.press({ key: 'setup-decision' })
+    expect(await drawn(band)).toContain('Where should the decision model run?')
     expect(await drawn(band)).toContain('OpenCode')
     await band.press({ key: 'setup-zen' })
     expect(await band.find({ key: 'setup-bias2' })).toBeDefined()
@@ -4016,7 +3981,7 @@ describe('decision models in the settings and the guide (fork)', () => {
     const { files } = home(on)
     await start($, on)
     const band = await $.ui.mount(DESK_BAND)
-    await band.press({ key: 'setup-jev' })
+    await band.press({ key: 'setup-decision' })
     await band.press({ key: 'setup-openrouter' })
     expect(await drawn(band)).toContain('openrouter.ai')
     await band.press({ key: 'setup-back' })
@@ -4025,26 +3990,26 @@ describe('decision models in the settings and the guide (fork)', () => {
     await band.input({ key: 'setup-or-key', text: 'or-k' })
     expect(files['/h/.config/openrouter/effortless.env']).toBe('OPENROUTER_API_KEY=or-k\n')
     await band.press({ key: 'setup-close' })
-    expect(set).toContainEqual({ key: 'effortless.decisionModels', value: `${ZEN}, openrouter/typesafe/jev-1.13` })
+    expect(set).toContainEqual({ key: 'effortless.decisionModels', value: `${ZEN}, openrouter/liquid/d1-ultra` })
     await band.unmount()
   })
 
-  test('the guide steps: both key steps are step 1 and go back to where Jev runs', () => {
-    expect(setupNext('jev-openrouter')).toBe('lean')
-    expect(setupNext('jev-typesafe')).toBe('lean')
-    expect(setupBack('jev-openrouter')).toBe('jev')
-    expect(setupBack('jev-typesafe')).toBe('jev')
-    expect(setupCounter('jev-openrouter')).toBe('1/4')
+  test('the guide steps: both key steps are step 1 and go back to where the decision model runs', () => {
+    expect(setupNext('decision-openrouter')).toBe('lean')
+    expect(setupNext('decision-typesafe')).toBe('lean')
+    expect(setupBack('decision-openrouter')).toBe('decision')
+    expect(setupBack('decision-typesafe')).toBe('decision')
+    expect(setupCounter('decision-openrouter')).toBe('1/4')
   })
 
   test('list edits, labels and env lines', () => {
-    expect(withRoute(ZEN, MERCURY)).toBe(`${ZEN}, ${MERCURY}`)
+    expect(withRoute(ZEN, LIQUID)).toBe(`${ZEN}, ${LIQUID}`)
     expect(withRoute(ZEN, ZEN)).toBe(ZEN)
     expect(withRoute(ZEN, 'gpt-5')).toBe(ZEN)
-    expect(withoutRoute(`${ZEN}, ${MERCURY}`, ZEN)).toBe(MERCURY)
-    expect(movedEarlier(`${ZEN}, ${MERCURY}`, MERCURY)).toBe(`${MERCURY}, ${ZEN}`)
-    expect(movedEarlier(`${ZEN}, ${MERCURY}`, ZEN)).toBe(`${ZEN}, ${MERCURY}`)
-    expect(routeLabel(parseDecisionModels(MERCURY)[0])).toBe('inception/mercury-decide:free')
+    expect(withoutRoute(`${ZEN}, ${LIQUID}`, ZEN)).toBe(LIQUID)
+    expect(movedEarlier(`${ZEN}, ${LIQUID}`, LIQUID)).toBe(`${LIQUID}, ${ZEN}`)
+    expect(movedEarlier(`${ZEN}, ${LIQUID}`, ZEN)).toBe(`${ZEN}, ${LIQUID}`)
+    expect(routeLabel(parseDecisionModels(LIQUID)[0])).toBe('liquid/d1-ultra')
     expect(routeLabel(parseDecisionModels('openrouter/acme/decider')[0])).toBe('acme/decider')
     expect(routeLabel(parseDecisionModels('opencode/jev-1.13-free')[0])).toBe('jev-1.13-free')
     expect(withEnvLine('A=1\nOPENROUTER_API_KEY=old\n', 'OPENROUTER_API_KEY', 'n$&w')).toBe('A=1\nOPENROUTER_API_KEY=n$&w\n')

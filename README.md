@@ -17,11 +17,11 @@ https://github.com/user-attachments/assets/9b5af48e-2ad8-4826-9443-4aeea1306664
 >
 > | Setting | Example |
 > |---|---|
-> | `decisionModels` | `opencode/jev-1.13-free, openrouter/inception/mercury-decide:free, openrouter/perplexity/pplx-decider-v1.1-27b, openrouter/microsoft/microsoft-decision-1, openrouter/typesafe/jev-1.13` |
+> | `decisionModels` | `openrouter/liquid/d1-ultra, openrouter/perplexity/pplx-decider-v1.2, typesafe/jev-latest` |
 > | `openrouterKey` | your OpenRouter key (or `OPENROUTER_API_KEY` in the environment) |
 > | `judgeTimeoutMs` / `judgeBudgetMs` | per model / all models together, in ms, default 4000 / 8000. Any positive whole number is used as typed; a prompt can wait up to the budget before Claude starts |
 >
-> Prefixes: `opencode/<model>` (Zen, free models need no key), `openrouter/<publisher>/<model>`, `typesafe/<model>` (TypeSafe key). Left empty, the fork behaves as upstream. Every call sends your next message (up to 4,000 characters) and the last reply's tail to that provider, so only list providers you are happy to send that to.
+> Prefixes: `opencode/<model>` (Zen, free models need no key), `openrouter/<publisher>/<model>`, `typesafe/<model>` (TypeSafe key). Left empty, Haiku judges alone. Every call sends your next message (up to 4,000 characters) and the last reply's tail to that provider, so only list providers you are happy to send that to.
 >
 > **Fork: a detailed Full handoff.** Full checks git and writes a detailed `HANDOFF.md` (original task, work completed, work remaining, attempted approaches, critical context, current state, suggested skills) to `docs/internal/`, `docs/local/` or `docs/`, whichever exists first, else the project root. Its turn runs at Medium, whatever the last prompt was judged, then the effort goes back. The handoff bar has an optional field for what the next session is for, used by Quick and Full alike (`/effortless handoff full <focus>` does the same).
 >
@@ -123,15 +123,14 @@ limit passes 80% (with a Save mode that caps effort at Medium), and when your ju
 
 Haiku 5.5 runs on your own Claude login and needs no key. It always makes the handoff call: from 30% of context, every second message, it reads what the chat was for, the trail of topics, the last reply and how full the context is, and says a fresh chat would suit only for a clear reason. Then the Compact button turns into a lit Handoff with the reason. Want Handoff on the bar all the time? Settings → Handoff → Handoff button → **Always**.
 
-Haiku also picks the effort, unless you add a decision model, a faster judge such as TypeSafe's Jev (about 0.25 s against about 1 s). The decision models answer the effort first, in order, and Haiku steps in whenever they are unsure or none answers. Run `/plugin configure effortless@capybearista` in Claude Code, or use the setup guide or the Judge card in Settings.
+Haiku also picks the effort, unless you add a decision model, a faster one such as `typesafe/jev-latest` (TypeSafe's Jev, about 0.25 s against about 1 s). The decision models answer the effort first, in order, and Haiku steps in whenever they are unsure or none answers. Run `/plugin configure effortless@capybearista` in Claude Code, or use the setup guide or the Judge card in Settings.
 
 | Setting | What it does |
 |---|---|
-| `auto` (default) | Haiku, and the decision models too. With none set: Jev on [TypeSafe](https://typesafe.ai) when a TypeSafe key is set in the settings or `TYPESAFE_API_KEY` |
+| `auto` (default) | The decision models first, in the order set, then Haiku. With none set: Haiku alone |
 | `haiku` | Haiku only, a key is never used |
-| `jev` | As `auto`, and the TypeSafe key may also come from `~/.config/jev/.env` |
 
-A key set with `/plugin configure` is kept in Claude Code's secure storage. A key pasted in the setup guide or the Judge card is written in plain text to `~/.config/jev/.env` (the file the jev skills read), never to a file of this repo. If every decision model fails or runs out of time, Haiku judges that prompt and effortless tells you why once per session (out of credits, key rejected, no answer).
+A key set with `/plugin configure` is kept in Claude Code's secure storage. A key pasted in the setup guide or the Judge card is written in plain text to `~/.config/jev/.env`, never to a file of this repo. If every decision model fails or runs out of time, Haiku judges that prompt and effortless tells you why once per session (out of credits, key rejected, no answer).
 
 Short follow-ups such as "go", "ok" or "yes" keep the effort already picked and ask no judge.
 
