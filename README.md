@@ -134,7 +134,9 @@ A key set with `/plugin configure` is kept in Claude Code's secure storage. A ke
 
 Short follow-ups such as "go", "ok" or "yes" keep the effort already picked and ask no judge.
 
-The judge is not told which model the chat runs on, nor the effort in force. It gives one effort for each of Haiku, Sonnet, Opus and Fable, each on that model's own scale (a migration can be max on Haiku and high on Opus), and effortless applies the answer for the model in use. Switch models mid-chat and the pick follows that model's own answer. When a decision model is unsure of the answer for your model, Haiku has a second look; when it is still unsure, the effort stays as it was. `/effortless debug` shows the judge's answers next to what was applied.
+The judge is not told which model the chat runs on, nor the effort in force. It gives one effort for each of Haiku, Sonnet, Opus and Fable, each on that model's own scale (a migration can be max on Haiku and high on Opus), and effortless applies the answer for the model in use. Switch models mid-chat and the pick follows that model's own answer. When a decision model is unsure of the answer for your model, Haiku has a second look; when it is still unsure, the effort stays as it was and the band says `kept`. `/effortless debug` shows the judge's answers next to what was applied.
+
+Pick a level yourself by clicking it in the band: effortless runs `/effort <level>` in the app and turns Auto off, and the band says `manual`. Auto on again hands the effort back to the judge at your next prompt. Where the app refuses the run, the command goes into the prompt box for you to send.
 
 ## Keys and trust
 
@@ -168,9 +170,7 @@ all numbers and limits are in [bench/RESULTS.md](bench/RESULTS.md).
 
 ## Models
 
-Effort only changes on Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.1, where a change of effort keeps the prompt cache. Fable 5.1 needs Claude Code 2.1.260 or later. On older models a change of effort between requests rewrote most of the prompt cache, which costs more than it saves, so Auto pauses there and the footer says `Paused`. Haiku 4.5 takes no effort setting, so Auto pauses there too.
-
-On Bedrock, Google Cloud's Agent Platform, a Claude apps gateway, with `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` set, or in a HIPAA organisation, no model keeps the prompt cache when effort changes. effortless does not detect those setups, so Auto still changes the effort there.
+effortless assumes every Opus, Sonnet, Haiku and Fable release keeps the prompt cache when effort changes. Claude Code's docs say that holds for Opus, Sonnet and Haiku 5.5 and for Fable 5.1 and later. effortless does not check the version, so on older models, which rewrite the cache, and on Bedrock, Google Cloud's Agent Platform, a Claude apps gateway, with `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` set, or in a HIPAA organisation, Auto still changes effort and each change can rewrite the cache. Models outside those four families pause Auto, and the footer says `Paused`.
 
 ## Split view
 
@@ -199,7 +199,7 @@ Tested on Claude Code 2.1.285 (stable), 2.1.286 and 2.1.288 at 80 and 120 column
 | `/effortless setup` | runs the setup again |
 | `/effortless auto` | Auto on or off |
 | `/effortless handoff` / `handoff full` [focus] | hands off without the bar, with your last choice of what follows; text after it is what the next session is for |
-| `/effortless stats` | what the prompts Auto steered cost this session, per effort, and what the judge took |
+| `/effortless stats` | what the prompts Auto steered cost this session, per effort, and what the judge took (Haiku split by why it was asked) |
 | `/effortless cold`, `swamp`, `hot`, `down` | shows that bar now, to try it |
 | `/effortless debug` | what the mod sees, and on its last line the model and effort the last request ran on |
 

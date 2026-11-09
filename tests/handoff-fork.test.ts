@@ -253,13 +253,13 @@ describe('full handoff effort (fork)', () => {
     expect(efforts.at(-1)).toBe('low')
   })
 
-  test('on a model where an effort change rewrites the cache, Full keeps the effort in use', async ($, on) => {
-    const { efforts } = handoffEngine(on, 'claude-opus-4-7')
+  test('on a model outside the four families, Full keeps the effort in use', async ($, on) => {
+    const { efforts } = handoffEngine(on, 'some-other-model')
     const mocked = mock.clock(on)
     await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
     await handOff($, 'full')
     await mocked.advance(2500)
-    await request($, 't2', 'xhigh', 'claude-opus-4-7')
+    await request($, 't2', 'xhigh', 'some-other-model')
     expect(efforts.at(-1)).toBe('xhigh')
   })
 })

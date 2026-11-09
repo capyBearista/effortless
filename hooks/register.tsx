@@ -21,10 +21,9 @@ export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // 80k requests of real Claude Code use, cache reads are about 76% of a session's cost, cache writes 16% and output 8%: effort
 // mostly changes how many tool calls a prompt makes, not what one answer writes, so all four are counted.
 const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
-// Changing effort between two requests keeps the prompt cache on these models: Haiku 5.5 measured 2026-11-03 (a low -> max
-// change read the whole cache), Fable 5.1 per Claude Code's docs from 2.1.260 (not measured here). Older Opus rewrote 56-100%
-// of the cache (measured), which costs more than any effort can save. Haiku 4.5 takes no effort at all.
-export const cacheSafe = (modelId: string) => /(opus|sonnet|haiku)-5-5|fable-5-1\b/.test(modelId)
+// shortcut: every Claude family is taken to keep the prompt cache when effort changes, as Opus/Sonnet/Haiku 5.5 and Fable 5.1+
+// do per Claude Code's docs; older models (which rewrote it) and no-cache setups are not detected (README, Models).
+export const cacheSafe = (modelId: string) => /opus|sonnet|haiku|fable/.test(modelId)
 // The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
 let ACCENT = accent()
 /** Takes the theme the settings name; the accent and every drawing follow it. */
@@ -78,7 +77,7 @@ const EFFORT_LABELS: Record<Effort, string> = { low: 'Low', medium: 'Medium', hi
 // Auto: whether the judge picks the effort.
 const isAuto = atom({ plugin: 'effortless', key: 'isAuto' } as const, true)
 const TYPESAFE_URL = 'https://api.typesafe.ai/v1/systemone'
-const EMPTY_SPENT: Spent = { prompts: 0, requests: 0, input: 0, write: 0, read: 0, out: 0, byEffort: {}, judge: { decision: 0, haiku: 0, ms: 0, tokens: 0 } }
+const EMPTY_SPENT: Spent = { prompts: 0, requests: 0, input: 0, write: 0, read: 0, out: 0, byEffort: {}, judge: { decision: 0, haikuUnsure: 0, haikuNoAnswer: 0, haikuOnly: 0, ms: 0, tokens: 0 } }
 const SWITCHED_MS = 2500
 // The prompt cache lives this long after the last request read or wrote it. A response may say which lifetime its
 // cache writes got (usage.cache_creation: ephemeral_1h / ephemeral_5m); until one does, 1 hour is assumed: 99% of
@@ -528,6 +527,10 @@ export function withMidTurn(text: string): string {
 }
 // A lower verdict for a message typed mid-turn, applied when that turn ends (see prompt.submit).
 let heldPick: Pick | null = null
+// Counts the changes the person makes by hand to the pick or to Auto. A judge compares it before and after: a change made
+// while it ran drops its verdict. Module state like heldPick: a read in the judge's own hook still gave the values from
+// before a click that the band (another hook) had already drawn.
+let handChanges = 0
 
 /** A short follow-up that keeps the current effort: "go" between two steps, not an answer to a question. */
 export function keepsEffort(message: string, context: string): boolean {
@@ -537,6 +540,11 @@ export function keepsEffort(message: string, context: string): boolean {
 /** The TypeSafe key in a ~/.config/jev/.env file's text. */
 export function parseTypesafeKey(text: string): string | undefined {
   return parseEnvLine(text, 'TYPESAFE_API_KEY')
+}
+
+/** A typed or pasted TypeSafe key: a TYPESAFE_API_KEY=… line gives its value (none when empty), else the text itself. */
+function typedTypesafeKey(text: string): string | undefined {
+  return /^\s*TYPESAFE_API_KEY\s*=/.test(text) ? parseTypesafeKey(text) : text
 }
 
 /** A NAME=value line's value in an .env file's text, quotes taken off. */
@@ -612,7 +620,12 @@ async function typesafeKey($: EngineInterface): Promise<string | undefined> {
   return askTypesafeFile
 }
 
-type Judged = { verdict?: Verdict; tokens: number }
+/** Why Haiku was asked: `unsure` (a decision model was unsure of, or silent on, this model), `chain` (no decision model
+ * answered; `said` names the last reason), or `only` (Haiku is the judge). `said` is what the verdict line shows. */
+type HaikuWhy = { kind: 'unsure' | 'chain' | 'only'; said: string }
+/** `haikuWhy` is set only when Haiku's verdict is the one used. `haikuMissed` is set when a decision model was unsure and
+ * Haiku gave no answer: the decision model's answer stands, and the verdict line says so. */
+type Judged = { verdict?: Verdict; tokens: number; haikuWhy?: HaikuWhy; haikuMissed?: string }
 
 /** Why a judge the person picked could not answer, in words: what a status code means for them. */
 export function judgeFailure(name: string, status: number | 'timeout'): string {
@@ -775,17 +788,30 @@ function judgeQuestion(prompt: string, context: string): string {
  */
 async function judge($: EngineInterface, prompt: string, target: JudgedModel | null): Promise<Judged> {
   const context = await recentContext($).catch(() => '')
-  const first = config.judge !== 'haiku' && config.decisionModels.length ? (await askChain($, prompt, context))?.judged : undefined
-  if (!first?.verdict) return askHaiku($, prompt, context)
-  if (target && (!first.verdict.efforts[target] || isUnsure(first.verdict.by, first.verdict.efforts[target]))) return haikuAfter($, first, prompt, context)
+  if (config.judge === 'haiku' || !config.decisionModels.length) return haikuJudges($, prompt, context, { kind: 'only', said: 'only judge' })
+  const chain = await askChain($, prompt, context)
+  const first = chain.judged
+  if (!first?.verdict) return haikuJudges($, prompt, context, { kind: 'chain', said: `chain: ${chain.reason}` })
+  if (target && (!first.verdict.efforts[target] || isUnsure(first.verdict.by, first.verdict.efforts[target]))) return haikuAfter($, first, prompt, context, target)
   return first
 }
 
-/** A decision model was unsure: Haiku makes the call, and both judges' tokens count. Without Haiku's answer the unsure
- * one is returned as it is, for the caller to keep the effort in force. */
-async function haikuAfter($: EngineInterface, decided: Judged, prompt: string, context: string): Promise<Judged> {
+/** Haiku as the judge: its verdict is counted under `why`. With no answer there is no verdict, so nothing is counted. */
+async function haikuJudges($: EngineInterface, prompt: string, context: string, why: HaikuWhy): Promise<Judged> {
   const haiku = await askHaiku($, prompt, context)
-  return { verdict: haiku.verdict ?? decided.verdict, tokens: haiku.tokens + decided.tokens }
+  return haiku.verdict ? { ...haiku, haikuWhy: why } : haiku
+}
+
+/** A decision model was unsure of, or silent on, the model in use: Haiku makes the call, and both judges' tokens count.
+ * Without Haiku's answer the decision model's answer is returned as it is, for the caller to keep the effort in force. */
+async function haikuAfter($: EngineInterface, decided: Judged, prompt: string, context: string, target: JudgedModel): Promise<Judged> {
+  const haiku = await askHaiku($, prompt, context)
+  const answer = decided.verdict?.efforts[target]
+  const said = answer ? `unsure ${(answer.sure ?? 0).toFixed(2)}` : `no answer for ${target}`
+  const tokens = haiku.tokens + decided.tokens
+  return haiku.verdict
+    ? { verdict: haiku.verdict, tokens, haikuWhy: { kind: 'unsure', said } }
+    : { verdict: decided.verdict, tokens, haikuMissed: `${said}, Haiku gave no answer` }
 }
 
 /** The key a decision model needs: none on Zen, the OpenRouter key, or the TypeSafe key for typesafe/ models. */
@@ -839,7 +865,7 @@ async function askChain(
   // The panel's Test passes its draft: the models and keys not saved yet.
   routes: readonly DecisionRoute[] = config.decisionModels,
   draftKeys: { openrouter?: string; typesafe?: string } = {},
-): Promise<{ judged: Judged; name: string; misses: string[] } | undefined> {
+): Promise<{ judged?: Judged; name: string; misses: string[]; reason: string }> {
   const start = await $.clock.now()
   let failed: string | undefined
   let skipped: string | undefined
@@ -849,7 +875,7 @@ async function askChain(
     const name = routeName(route)
     const draft = route.provider !== 'zen' ? draftKeys[route.provider]?.trim() : undefined
     // A pasted TYPESAFE_API_KEY=… line counts as its value, as when it is saved.
-    const key = (route.provider === 'typesafe' && draft ? (parseTypesafeKey(draft) ?? draft) : draft) || (await routeKey($, route))
+    const key = (route.provider === 'typesafe' && draft ? typedTypesafeKey(draft) : draft) || (await routeKey($, route))
     if (route.provider !== 'zen' && !key) {
       skipped = skipped ?? `${name} has no key`
       misses.push(`${routeLabel(route)}: no key`)
@@ -867,16 +893,16 @@ async function askChain(
       const took = (((await $.clock.now()) - askedAt) / 1000).toFixed(1)
       lastChainAnswer = `${routeLabel(route)} ${took} s`
       void proof($, `judge: ${name} answered`)
-      return { judged: asked.judged, name: routeLabel(route), misses }
+      return { judged: asked.judged, name: routeLabel(route), misses, reason: '' }
     }
     void proof($, `judge: ${asked.reason}, next`)
     failed = asked.reason
     misses.push(`${routeLabel(route)}: ${asked.reason.replace(`${name} `, '')}`)
   }
   lastChainAnswer = 'none answered, Haiku judged'
-  const reason = failed ?? skipped
-  if (reason) warnJudge($, reason)
-  return undefined
+  const reason = failed ?? skipped ?? 'no decision model answered'
+  warnJudge($, reason)
+  return { name: '', misses, reason }
 }
 
 /** One decision model, asked once: its verdict, or why not (quiet when it answered in a shape that is not a verdict). */
@@ -945,8 +971,8 @@ async function testJudge($: EngineInterface, judgeKind: string, draftChain = cha
     const routes = parseDecisionModels(draftChain)
     if (judgeKind !== 'haiku' && routes.length) {
       const chained = await askChain($, JUDGE_TEST_PROMPT, '', routes, draftKeys)
-      const before = chained?.misses.length ? ` · ${chained.misses.join(' · ')}` : ''
-      if (chained) return { ok: true, text: `${said(chained.name, chained.judged)} in ${await took()}${before}` }
+      const before = chained.misses.length ? ` · ${chained.misses.join(' · ')}` : ''
+      if (chained.judged) return { ok: true, text: `${said(chained.name, chained.judged)} in ${await took()}${before}` }
       return { ok: false, text: judgeTesting.reason ?? 'No decision model gave a usable answer' }
     }
     const h = await askHaiku($, JUDGE_TEST_PROMPT, '')
@@ -1064,7 +1090,8 @@ async function modelIs($: EngineInterface, id: string) {
     // it was, so that is said anew; Haiku's holds for every model.
     const answer = current.judged?.[key]
     const why = current.by === 'decision' || current.why === UNSURE ? (answer ? sureWords(answer) : '') : current.why
-    const own = answer && !isUnsure(current.by, answer) ? { ...(await settledPick($, answer, why)), sure: answer.sure } : {}
+    // No sure answer for the new model (and not the person's own level): the level is kept, and the band says so.
+    const own = answer && !isUnsure(current.by, answer) ? { ...(await settledPick($, answer, why)), sure: answer.sure } : current.judged ? { why: UNSURE } : {}
     await choose($, { ...current, model: key, ...own })
   }
 }
@@ -1075,6 +1102,23 @@ async function settledPick($: EngineInterface, answer: ModelAnswer, why: string)
   const leaned = bounded(tipped(answer.effort, answer.sure, config.bias), config.floor, config.ceiling)
   const effort = capped(leaned, saving)
   return { effort, why: effort !== leaned ? 'save mode' : leaned !== answer.effort ? 'your settings' : why }
+}
+
+/**
+ * The stored pick settled again under the current Min, Max, Lean and save mode: at save mode's switch, and at session
+ * start after a saved setting reloaded the plugin. A judge's answer is taken again from its answers; a kept effort is
+ * only held within the limits; the person's own pick and a named level stay.
+ */
+async function resettle($: EngineInterface) {
+  const p = await read($, pick)
+  if (!p || p.by === 'manual' || p.by === 'named') return
+  const saving = (await read($, saveUntil)) !== null
+  const answer = p.judged?.[p.model]
+  const next =
+    answer && !isUnsure(p.by, answer)
+      ? { ...p, ...(await settledPick($, answer, p.by === 'decision' || ['save mode', 'your settings'].includes(p.why) ? sureWords(answer) : p.why)) }
+      : { ...p, effort: capped(bounded(p.effort, config.floor, config.ceiling), saving) }
+  if (next.effort !== p.effort || next.why !== p.why) await choose($, next)
 }
 
 async function sessionModel($: EngineInterface): Promise<ModelKey> {
@@ -1172,7 +1216,14 @@ export function asSpent(t: unknown): Spent {
     read: num(v.read),
     out: num(v.out),
     byEffort: v.byEffort && typeof v.byEffort === 'object' ? v.byEffort : {},
-    judge: { decision: num(judged.decision), haiku: num(judged.haiku), ms: num(judged.ms), tokens: num(judged.tokens) },
+    judge: {
+      decision: num(judged.decision),
+      haikuUnsure: num(judged.haikuUnsure),
+      haikuNoAnswer: num(judged.haikuNoAnswer),
+      haikuOnly: num(judged.haikuOnly),
+      ms: num(judged.ms),
+      tokens: num(judged.tokens),
+    },
     helpers: {
       runs: v.helpers?.runs && typeof v.helpers.runs === 'object' ? v.helpers.runs : {},
       requests: num(v.helpers?.requests),
@@ -1215,15 +1266,18 @@ async function tally(
   })
 }
 
-/** Counts one prompt Auto judged: under its effort, and what the judge took. */
-async function countPrompt($: EngineInterface, effort: Effort | undefined, by: Pick['by'] | undefined, ms: number, judgeTokens: number) {
+/** Counts one prompt Auto judged: under its effort, by which judge (and for Haiku, why it was asked), and what the judge took.
+ * No judge (no kind): nothing is counted for the judge, its time included, so the average is per counted prompt. */
+async function countPrompt($: EngineInterface, effort: Effort | undefined, kind: 'decision' | HaikuWhy['kind'] | undefined, ms: number, judgeTokens: number) {
   await update($, saved, old => {
     const t = asSpent(old)
     const judged = {
-      decision: t.judge.decision + (by === 'decision' ? 1 : 0),
-      haiku: t.judge.haiku + (by === 'haiku' ? 1 : 0),
-      ms: t.judge.ms + ms,
-      tokens: t.judge.tokens + judgeTokens,
+      decision: t.judge.decision + (kind === 'decision' ? 1 : 0),
+      haikuUnsure: t.judge.haikuUnsure + (kind === 'unsure' ? 1 : 0),
+      haikuNoAnswer: t.judge.haikuNoAnswer + (kind === 'chain' ? 1 : 0),
+      haikuOnly: t.judge.haikuOnly + (kind === 'only' ? 1 : 0),
+      ms: t.judge.ms + (kind ? ms : 0),
+      tokens: t.judge.tokens + (kind ? judgeTokens : 0),
     }
     if (!effort) return { ...t, judge: judged }
     const bucket = t.byEffort[effort] ?? { prompts: 0, cost: 0 }
@@ -1255,6 +1309,7 @@ async function toggleSave($: EngineInterface): Promise<string> {
   const heat = await read($, hot)
   const until = heat?.resetsAt ? new Date(heat.resetsAt).getTime() : (await $.clock.now()) + 5 * 3600_000
   await update($, saveUntil, () => (saving ? null : until))
+  await resettle($)
   return saving ? 'save mode off' : 'save mode on, Auto stays at medium or below until the limit resets'
 }
 
@@ -1955,6 +2010,7 @@ async function saveSetting($: EngineInterface, field: keyof typeof SETTING_FIELD
   }
   // The keys are the app's secrets: never in raw, kept as they were.
   config = { ...readConfig(raw), typesafeKey: config.typesafeKey, openrouterKey: config.openrouterKey }
+  await resettle($)
   applyTheme()
   $.ui.invalidate('ui.render')
 }
@@ -2044,13 +2100,13 @@ async function saveOpenRouterKey($: EngineInterface, key: string): Promise<boole
  * A key pasted in the panel goes to ~/.config/jev/.env: a plugin cannot write the app's secret settings. From then on
  * that file wins over an older key in the settings.
  */
-async function saveTypesafeKey($: EngineInterface, key: string) {
-  const clean = key.trim()
-  if (!clean) return
+async function saveTypesafeKey($: EngineInterface, key: string): Promise<boolean> {
+  const clean = typedTypesafeKey(key)?.trim()
+  if (!clean) return false
   const home = (await envUserProfile($)) ?? (await envHome($))
   if (!home) {
     $.ui.toast('effortless: no home folder found to save the key in.')
-    return
+    return false
   }
   const path = `${home}/.config/jev/.env`
   const before = await $.fs.read(path).catch(() => '')
@@ -2058,7 +2114,7 @@ async function saveTypesafeKey($: EngineInterface, key: string) {
     await $.fs.write(path, withTypesafeKey(typeof before === 'string' ? before : '', clean))
   } catch (error) {
     $.ui.toast(`effortless: could not save the key: ${(error instanceof Error ? error.message : String(error)).slice(0, 120)}`)
-    return
+    return false
   }
   await $.store.set('keyFromFile', true)
   keyFromFile = true
@@ -2067,6 +2123,7 @@ async function saveTypesafeKey($: EngineInterface, key: string) {
   warned.clear()
   $.ui.toast('effortless: TypeSafe key saved. Decision models use it from the next message.')
   $.ui.invalidate('ui.render')
+  return true
 }
 
 // Fork: decision is where a decision model runs (Zen, OpenRouter or TypeSafe); decision-openrouter and decision-typesafe take that key.
@@ -2223,7 +2280,7 @@ const share = (part: number, whole: number) => `${Math.round((part / whole) * 10
  */
 export function savedText(raw: Spent): string {
   const t = asSpent(raw)
-  const judged = t.judge.decision + t.judge.haiku
+  const judged = t.judge.decision + t.judge.haikuUnsure + t.judge.haikuNoAnswer + t.judge.haikuOnly
   const helperRuns = EFFORTS.reduce((n, e) => n + (t.helpers.runs[e] ?? 0), 0)
   if (t.prompts === 0 && judged === 0 && helperRuns === 0) return 'nothing measured yet'
   const input = t.input * WEIGHT.input
@@ -2245,7 +2302,9 @@ export function savedText(raw: Spent): string {
     lines.push(`Helpers: ${helperRuns} subagent${helperRuns === 1 ? '' : 's'} (${per.join(', ')}), ${t.helpers.requests} requests, cost about ${tokens(Math.round(t.helpers.cost))} tokens`)
   }
   if (judged) {
-    lines.push(`Judge: decision models ${t.judge.decision}, Haiku ${t.judge.haiku}, average ${Math.round(t.judge.ms / judged)} ms, ${tokens(t.judge.tokens)} tokens in all`)
+    lines.push(
+      `Judge: decision models ${t.judge.decision}, Haiku after unsure ${t.judge.haikuUnsure}, after no answer ${t.judge.haikuNoAnswer}, Haiku only ${t.judge.haikuOnly}, average ${Math.round(t.judge.ms / judged)} ms, ${tokens(t.judge.tokens)} tokens in all`,
+    )
   }
   return lines.join('\n')
 }
@@ -2253,6 +2312,7 @@ export function savedText(raw: Spent): string {
 /** You picked an effort (terminal rows): Auto for effort goes off and the requests follow; Enter on /effort moves the app. */
 async function pickEffort($: EngineInterface, level: Effort) {
   const t0 = Date.now()
+  handChanges++
   const inUse = (await read($, model)) ?? (await sessionModel($))
   const t1 = Date.now()
   // Together, so the app redraws once for the click and not once per write.
@@ -2262,12 +2322,21 @@ async function pickEffort($: EngineInterface, level: Effort) {
     choose($, { model: inUse, effort: level, why: 'your pick', by: 'manual' }),
   ])
   const t2 = Date.now()
-  await typeCommand($, `/effort ${level}`)
+  // The app's own /effort, run as if the person typed it, so the app's effort follows the pick. Where the run is refused,
+  // the command goes into the prompt box for the person to send, as before.
+  const ran = await $.command.run({ command: 'effort', args: level }).then(() => true, () => false)
+  if (ran) {
+    // The app now runs at the pick: its effort is the one effortless has seen, so the next request does not read it as
+    // the person's own choice (turn.step) and overwrite the pick.
+    engineEffort = level
+    await update($, appEffort, () => level)
+  } else await typeCommand($, `/effort ${level}`)
   const t3 = Date.now()
-  void proof($, `click ${level}: ${t3 - t0} ms (read ${t1 - t0}, state ${t2 - t1}, typed command ${t3 - t2})`)
+  void proof($, `click ${level}: ${t3 - t0} ms (read ${t1 - t0}, state ${t2 - t1}, ${ran ? 'command run' : 'command typed'} ${t3 - t2})`)
 }
 
 async function toggleAutoEffort($: EngineInterface) {
+  handChanges++
   const turnOn = !(await read($, isAuto))
   await update($, isAuto, () => turnOn)
   await $.store.set('isAuto', turnOn)
@@ -2368,9 +2437,7 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
   const effortTip = !v.auto
     ? 'Auto is off: the effort stays as you set it. The power button turns Auto on.'
     : v.pausedNow
-      ? v.modelNow === 'haiku'
-        ? 'This model runs without an effort level, so Auto has nothing to set.'
-        : 'Auto waits on this model: an effort change would rewrite its prompt cache.'
+      ? 'Auto waits on this model: an effort change would rewrite its prompt cache.'
       : !effortOf(v)
         ? 'This model runs without an effort level, so Auto has nothing to set.'
       : [
@@ -2392,6 +2459,12 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
 function effortOf(v: Snap): Effort | undefined {
   if (v.current) return v.current.effort
   return EFFORTS.includes(v.shownByApp as Effort) ? (v.shownByApp as Effort) : undefined
+}
+
+/** How the level in force was picked, as the bands word it: by the person, or kept from the last prompt (a kept level
+ * only while Auto is on, as the dashboard's word has it). */
+function pickedHow(p: Pick | null, auto: boolean): 'manual' | 'kept' | undefined {
+  return p?.by === 'manual' ? 'manual' : p?.why === UNSURE && auto ? 'kept' : undefined
 }
 
 // For /effortless debug: how often the app asked for the band, when, and the last error drawing it.
@@ -2538,10 +2611,25 @@ export function dashboardLines(d: {
   contextPercent: number | null
   reason: string
   last: { cost: number; ms: number } | null
+  /** The person picked this level by hand: it runs whether Auto is on or off. */
+  manual?: boolean
+  /** The judge was unsure, so the level in force was kept from the last prompt. */
+  kept?: boolean
 }): { head: string; what: string; rest: string; detail: string } {
   const level = d.effort ? EFFORT_LABELS[d.effort] : 'Auto'
-  // Auto on or off is the button's to say (and the terminal's effort row's), not the text's.
-  const what = d.judging ? 'Deciding…' : !d.auto ? 'Off' : d.paused ? `${level} · Auto paused` : level
+  // Auto on or off is the button's to say (and the terminal's effort row's), not the text's. A kept level says so in
+  // the word: otherwise it reads as a verdict that never came.
+  const what = d.judging
+    ? 'Deciding…'
+    : d.manual && d.effort
+      ? `${level} · manual`
+      : !d.auto
+        ? 'Off'
+        : d.kept
+          ? `${level} · kept`
+          : d.paused
+            ? `${level} · Auto paused`
+            : level
   const head = [
     `✦ ${what}`,
     d.cacheNow === null ? null : `cache ${cacheLabel(d.cacheNow)}`,
@@ -2578,7 +2666,7 @@ export function flashColor(ms: number | null): string {
 let flashWord: string | null = null
 let flashAt: number | null = null
 
-async function effortFlash($: EngineInterface, what: string, judging: boolean, entering = false): Promise<string> {
+async function effortFlash($: EngineInterface, what: string, judging: boolean, entering = false, quiet = false): Promise<string> {
   const now = await $.clock.now()
   // The dashboard coming back (after Handoff, settings or an alert) takes the word as it is: a change made while it was
   // away is not a switch to point at.
@@ -2587,8 +2675,9 @@ async function effortFlash($: EngineInterface, what: string, judging: boolean, e
     flashAt = null
   }
   if (!judging) {
-    // Auto switched off or on is not a new verdict: the switch says it, so the word changes without the flash.
-    if (flashWord !== null && flashWord !== what) flashAt = what === 'Off' || flashWord === 'Off' ? null : now
+    // Auto switched off or on, a level picked by hand and a kept level are not a new verdict: the word changes without
+    // the flash (quiet).
+    if (flashWord !== null && flashWord !== what) flashAt = quiet || what === 'Off' || flashWord === 'Off' ? null : now
     flashWord = what
   }
   const since = flashAt === null ? null : now - flashAt
@@ -3080,11 +3169,16 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   const drawn = e.surface !== 'terminal' && 'Svg' in els
   // A cold cache is the cold band's to say; the resting bar shows the countdown only while there is one.
   const cacheShown = config.hide.includes('timer') || (v.cacheNow !== null && v.cacheNow <= 0) ? null : v.cacheNow
+  const how = pickedHow(v.current, v.auto)
+  const manual = how === 'manual'
+  const kept = how === 'kept'
   const { head, what, rest, detail } = dashboardLines({
     auto: v.auto,
     paused: Boolean(v.pausedNow),
     judging: Boolean(v.judging),
     effort: effortNow,
+    manual,
+    kept,
     cacheNow: drawn ? null : cacheShown,
     // Desktop draws the context as a ring and a figure (as the swamp band does); the terminal says it in words.
     contextPercent: e.surface === 'terminal' && lastContext && lastContext.window ? lastContext.percent : null,
@@ -3100,6 +3194,20 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
       $.ui.invalidate('ui.render')
     } else await openPluginSettings($)
   }
+  // The desktop's effort word is text and cannot be pressed: the five levels beside it are buttons, the one in force
+  // lit as in the terminal's effort row. Hidden while the judge decides, so a press cannot race its verdict.
+  const levelButtons =
+    drawn && !v.judging ? (
+      <Box key="dash-levels" flexShrink={0} flexDirection="row" gap={1} alignItems="center">
+        {EFFORTS.map(level =>
+          level === effortNow ? (
+            <Button key={`dash-e-${level}`} variant="primary" label={EFFORT_LABELS[level]} onPress={() => pickEffort($, level)} />
+          ) : (
+            <Button key={`dash-e-${level}`} plain dimColor label={EFFORT_LABELS[level]} onPress={() => pickEffort($, level)} />
+          ),
+        )}
+      </Box>
+    ) : null
   const buttons = [
     // Auto sits in the bar on both: in the terminal the effort row under the band drops its own (autoInBar), since
     // there it was cut off at the window's foot. The hotkey only in the terminal; the app draws it faint on grey.
@@ -3170,9 +3278,9 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   // The terminal flashes the effort word as the desktop does: violet on a change, fading back to white.
   if (e.surface === 'terminal')
     return terminalBand($, e, { key: 'dash', kind: 'calm', color: DASH_TEXT, bg: DASH_BG, edge: DASH_EDGE, title: head.replace(/^✦ /, ''), detail, buttons, autoInBar: true,
-      word: { text: what, color: await effortFlash($, what, Boolean(v.judging), entering), rest } })
+      word: { text: what, color: await effortFlash($, what, Boolean(v.judging), entering, manual || kept), rest } })
   const Svg = 'Svg' in els ? els.Svg : undefined
-  const wordColor = await effortFlash($, what, Boolean(v.judging), entering)
+  const wordColor = await effortFlash($, what, Boolean(v.judging), entering, manual || kept)
   glowReadAt = Date.now()
   const glowNow = (await $.clock.now().catch(() => nowMs)) + drawLead
   const glowSource = Svg ? judgeGlowAt(judgeStartedAt, judgeEndedAt, glowNow) : null
@@ -3217,6 +3325,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
           {!v.judging && v.auto && MODELS.find(m => m.key === v.modelNow) ? (
             <Text key="dash-model" color={DASH_DIM}>{` · ${MODELS.find(m => m.key === v.modelNow)!.label}`}</Text>
           ) : null}
+          {levelButtons}
           {/* While the judge decides: the progress bar's thinking dots, as a plain image (its CSS still runs, and a
               redraw does not restart it the way an interactive frame does). */}
           {v.judging && Svg ? (
@@ -3323,6 +3432,9 @@ async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opt
         : auto
           ? 'Picks the effort at the next prompt'
           : 'Pick an effort'
+  // The lit level says how it was picked, as the dashboard's word does (nothing while the judge decides). The label is
+  // longer than the bare level; the row has no measured widths, and the note at the end is the part that gives way.
+  const how = judging ? undefined : pickedHow(current, auto)
   const rows = (
     <Box flexDirection="column">
       <Box flexDirection="row" gap={1} alignItems="center">
@@ -3332,7 +3444,7 @@ async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opt
         </Box>
         {EFFORTS.map(level =>
           level === effortNow ? (
-            <Button key={`e-${level}`} variant="primary" label={level} onPress={setEffort(level)} />
+            <Button key={`e-${level}`} variant="primary" label={how ? `${level} · ${how}` : level} onPress={setEffort(level)} />
           ) : (
             <Button key={`e-${level}`} plain dimColor label={level} onPress={setEffort(level)} />
           ),
@@ -3597,6 +3709,8 @@ export const register: Register = (on, options) => {
       // The first time the mod runs, the setup guide opens above the prompt.
       setupDone !== true ? update($, setupStep, () => 'pick').then(() => update($, setupPending, () => true)) : null,
     ])
+    // A saved setting reloads the plugin: the pick kept in this chat is settled again under the new Min, Max and Lean.
+    await resettle($)
     // The command file lists /effortless before the session starts; registering it here makes plain /effortless the
     // mod's own command afterwards, instead of the file run as a skill.
     void $.command.register({ name: 'effortless', description: 'effortless: settings, debug, handoff, setup, auto, stats.' }).catch(() => undefined)
@@ -3815,7 +3929,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
         heldPick = null
         await choose($, applied)
       }
-      await countPrompt($, named, 'named', 0, 0)
+      await countPrompt($, named, undefined, 0, 0)
       void proof($, `named level ${named} in "${e.text.slice(0, 50)}": no judge`)
       $.ui.invalidate('ui.render')
       return next(e)
@@ -3831,10 +3945,15 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     try {
       const inUse = await sessionModel($)
       const startedAt = Date.now()
-      const { verdict, tokens: judgeTokens } = await judge($, shown, inUse)
+      const handsBefore = handChanges
+      const judged = await judge($, shown, inUse)
+      const { verdict, tokens: judgeTokens } = judged
       await endJudgeGlow($, 'verdict')
       const ms = Date.now() - startedAt
       const running = await read($, pick)
+      // The person changed the pick or Auto by hand while the judge ran: the verdict is dropped. A manual pick made before
+      // the prompt (Auto turned back on since) is not a change now, so its verdict still applies.
+      const pickedMeanwhile = handChanges !== handsBefore
       const answer = verdict?.efforts[inUse]
       let applied: Pick | null = null
       if (verdict && answer && !isUnsure(verdict.by, answer)) {
@@ -3848,11 +3967,16 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
         const saving = (await read($, saveUntil)) !== null
         applied = { model: inUse, effort: capped(bounded(kept, config.floor, config.ceiling), saving), why: UNSURE, by: verdict.by, ...(verdict.judgeName ? { judgeName: verdict.judgeName } : {}), judged: verdict.efforts }
       }
-      lastVerdictLine = verdict ? `${verdict.judgeName ?? verdict.by}: ${answersText(verdict)} -> ${applied?.effort} on ${inUse} (${applied?.why})` : 'no verdict'
-      await countPrompt($, applied?.effort, verdict?.by, ms, judgeTokens)
+      const via = judged.haikuWhy ? `haiku (${judged.haikuWhy.said})` : (verdict?.judgeName ?? 'decision')
+      const missed = judged.haikuMissed ? ` (${judged.haikuMissed})` : ''
+      const outcome = pickedMeanwhile ? 'manual pick during judging: verdict dropped' : `${applied?.effort} on ${inUse} (${applied?.why})`
+      lastVerdictLine = verdict ? `${via}: ${answersText(verdict)}${missed} -> ${outcome}` : 'no verdict'
+      // No verdict counts for nothing. A verdict dropped for a hand pick counts for the judge only: Auto did not steer it.
+      await countPrompt($, pickedMeanwhile ? undefined : applied?.effort, verdict ? (judged.haikuWhy?.kind ?? 'decision') : undefined, ms, judgeTokens)
       void proof($, `judged in ${ms} ms: ${lastVerdictLine} for "${e.text.slice(0, 50)}"`)
       $.ui.invalidate('ui.render')
-      if (applied) {
+      // A click during the awaits above also keeps its pick (the stats and the proof line above still count the verdict).
+      if (applied && handChanges === handsBefore) {
         // Mid-turn, a lower verdict would cut the running task's effort for its remaining steps: it waits for the
         // turn to end (the queued message may run as a turn of its own). A higher one helps the task, so it applies.
         if (midTurn && running && EFFORTS.indexOf(applied.effort) < EFFORTS.indexOf(running.effort)) {
@@ -3902,6 +4026,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       // person's (they may have set it before this first prompt), so it wins. A pick made in this chat stays.
       const takesApp = isFirst && pickCarried && !(await read($, isAuto)) && (await read($, pick))?.effort !== seen
       if (isByPerson || takesApp) {
+        handChanges++
         await update($, isAuto, () => false)
         await $.store.set('isAuto', false)
         await choose($, { model: await sessionModel($), effort: seen, why: 'your pick in the app', by: 'manual' })
@@ -4921,7 +5046,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
               onSubmit={async (v: string) => {
                 if (!v.trim()) return
                 await update($, setupDraft, d => ({ ...d, key: undefined }))
-                await saveTypesafeKey($, v)
+                if (!(await saveTypesafeKey($, v))) return
                 await update($, setupDraft, d => ({ ...d, decisionModels: withTypesafeRoute(d.decisionModels) }))
                 await goSetup($, 'lean')
               }} />
