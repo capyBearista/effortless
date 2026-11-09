@@ -21,10 +21,10 @@ export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // 80k requests of real Claude Code use, cache reads are about 76% of a session's cost, cache writes 16% and output 8%: effort
 // mostly changes how many tool calls a prompt makes, not what one answer writes, so all four are counted.
 const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
-// Changing effort between two requests keeps the prompt cache on these models only (Haiku 5.5 measured 2026-11-03: a
-// low -> max change read the whole cache). On Fable 5.1 and older Opus the next request rewrote 56-100% of the cache
-// (measured), which costs more than any effort can save. Haiku 4.5 takes no effort at all.
-export const cacheSafe = (modelId: string) => /(opus|sonnet|haiku)-5-5/.test(modelId)
+// Changing effort between two requests keeps the prompt cache on these models: Haiku 5.5 measured 2026-11-03 (a low -> max
+// change read the whole cache), Fable 5.1 per Claude Code's docs from 2.1.260 (not measured here). Older Opus rewrote 56-100%
+// of the cache (measured), which costs more than any effort can save. Haiku 4.5 takes no effort at all.
+export const cacheSafe = (modelId: string) => /(opus|sonnet|haiku)-5-5|fable-5-1\b/.test(modelId)
 // The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
 let ACCENT = accent()
 /** Takes the theme the settings name; the accent and every drawing follow it. */
@@ -339,43 +339,49 @@ const DONE_EDGE = '#2f7a4c'
 // The mark in the done green, for the titles of cards that have landed.
 const DONE_MARK_SVG = MARK_SVG.replace(/#7566d8/g, '#2f9a5e').replace(/#a79cf7/g, '#7fe0a4').replace(/#cfc7ff/g, '#c8f4d8')
 
-// The models the judge answers for, each on its own scale. Fable is not asked: Auto pauses there.
-const JUDGED: readonly JudgedModel[] = ['haiku', 'sonnet', 'opus']
-/**
- * What each effort level is for, per model. Effort levels mean a different amount of thinking on each model (Anthropic:
- * "effort names don't mean the same amount of thinking across models"; Opus 5.5 defaults to medium, Fable 5.1 is
- * recommended at high), so no fixed step between models holds: a trivial task is low everywhere, a migration is max on
- * Haiku but high on Opus. shortcut: drafted from Anthropic's per-model starting points and the maintainer's examples, not
- * measured; the external decisionbench project is where to measure it.
- */
-const MODEL_LEVELS: Record<JudgedModel, { about: string; levels: Record<Effort, string> }> = {
+// The models the judge answers for, each on its own scale.
+const JUDGED: readonly JudgedModel[] = ['haiku', 'sonnet', 'opus', 'fable']
+
+// The text is decisionbench's tuned prompt plus effortless's rules: on its 59 holdout Cases it scored a mean lift of 21.2 points
+// over 6 decision models, against 13.9 for the old text. The Haiku-as-judge path is not measured.
+const MODEL_LEVELS: Record<JudgedModel, { instructions: string; levels: Record<Effort, string> }> = {
   haiku: {
-    about: 'Claude Haiku 5.5, the fastest and cheapest: fine for small, well-defined work, strained by hard multi-step work',
+    instructions: 'Which effort should Claude Haiku 5.5 use for the next message? Haiku is the smallest model, so it needs more effort than a larger model for the same work: the same as the work alone suggests for a quick answer or trivial step, and one level more for any real task such as a fix, a feature, an analysis or a plan.',
     levels: {
-      low: 'chat, quick answers, short one-step tool tasks',
-      medium: 'ordinary work: a few tool calls or edits, normal coding',
-      high: 'longer multi-step tasks, multi-file changes, strict instructions',
-      xhigh: 'hard debugging, large refactors',
-      max: 'the hardest jobs it can try: migrations, architecture, long investigations',
+      low: 'quick answer or trivial action: no tools or one simple step, no planning',
+      medium: 'normal work: a few tool calls or edits',
+      high: 'a normal task: a fix, a feature, an analysis or a plan',
+      xhigh: 'very hard: a long investigation or complex change',
+      max: 'the hardest research-level work',
     },
   },
   sonnet: {
-    about: 'Claude Sonnet 5.5, strong at everyday coding and agent work',
+    instructions: 'Which effort should Claude Sonnet 5.5 use for the next message?',
     levels: {
-      low: 'chat, writing, extraction, search; no planning',
-      medium: 'ordinary coding and multi-step tool work',
-      high: 'hard debugging, large refactors, careful reviews',
-      xhigh: 'very hard: long investigations, big migrations',
-      max: 'research-level work where a miss is very costly',
+      low: 'quick answer or trivial action: no tools or one simple step, no planning',
+      medium: 'normal work: a few tool calls or edits',
+      high: 'hard or large multi-step job: many tool calls, mistakes are costly',
+      xhigh: 'very hard: a long investigation or complex change',
+      max: 'the hardest research-level work',
     },
   },
   opus: {
-    about: 'Claude Opus 5.5, the strongest of the three: hard debugging and architecture need less effort from it',
+    instructions: 'Which effort should Claude Opus 5.5 use for the next message? Opus is a strong model, so it needs less effort than a smaller model for the same work: one level lower than the work alone suggests. Ordinary focused work (an explanation, a contained fix, a small feature) is low for Opus.',
     levels: {
-      low: 'quick answers, small edits',
-      medium: 'most coding and debugging, multi-step work',
-      high: 'hard debugging, architecture, large refactors, migrations',
-      xhigh: 'very hard, long-horizon investigations',
+      low: 'quick answer or trivial action: no tools or one simple step, no planning',
+      medium: 'normal work: a few tool calls or edits',
+      high: 'hard or large multi-step job: many tool calls, mistakes are costly',
+      xhigh: 'very hard: a long investigation or complex change',
+      max: 'the hardest research-level work',
+    },
+  },
+  fable: {
+    instructions: 'Which effort should Claude Fable 5.1 use for the next message? Fable is the strongest model, so it needs the least effort for the same work: one or two levels lower than the work alone suggests. Ordinary focused work (an explanation, a contained fix, a small feature) is low for Fable.',
+    levels: {
+      low: 'a quick answer or everyday work: an explanation, a contained fix, a small feature',
+      medium: 'normal work: a few tool calls or edits',
+      high: 'hard or large multi-step job: many tool calls, mistakes are costly',
+      xhigh: 'very hard: a long investigation or complex change',
       max: 'the hardest research-level work',
     },
   },
@@ -393,13 +399,13 @@ If the person asks for deep thought ("think hard", "ultrathink", "be thorough"),
 
 Effort levels mean a different amount of thinking on each model, so answer for each model on its own scale: the same task can need different levels on different models.`
 
-const JUDGE_SYSTEM = `You choose the reasoning effort an agentic assistant (it reads files, runs tools and edits things, not only code) should use for the user's next message: the cheapest effort that will still do the job well, once for each of three Claude models.
+const JUDGE_SYSTEM = `You choose the reasoning effort an agentic assistant (it reads files, runs tools and edits things, not only code) should use for the user's next message: the cheapest effort that will still do the job well, once for each Claude model below.
 
-${JUDGED.map(m => `${m}: ${MODEL_LEVELS[m].about}.\n${EFFORTS.map(e => `- ${e}: ${MODEL_LEVELS[m].levels[e]}`).join('\n')}`).join('\n\n')}
+${JUDGED.map(m => `${m}: ${MODEL_LEVELS[m].instructions}\n${EFFORTS.map(e => `- ${e}: ${MODEL_LEVELS[m].levels[e]}`).join('\n')}`).join('\n\n')}
 
 ${EFFORT_RULES}
 
-Reply with JSON only: {"haiku":"low|medium|high|xhigh|max","sonnet":"low|medium|high|xhigh|max","opus":"low|medium|high|xhigh|max","sure":0.0-1.0 how sure you are,"why":"at most 6 words, in the user's language"}`
+Reply with JSON only: {${JUDGED.map(m => `"${m}":"low|medium|high|xhigh|max"`).join(',')},"sure":0.0-1.0 how sure you are,"why":"at most 6 words, in the user's language"}`
 
 /** A judge's answer: its effort for each model it answered for, and who said it. */
 type Verdict = { efforts: Answers; why: string; by: 'decision' | 'haiku'; judgeName?: string }
@@ -452,11 +458,11 @@ function lastAssistantText(messages: readonly { role: string; text: string }[]):
 
 
 // The decision models' task: the same rules as Haiku's, one typed question per model.
-const DECISION_TASK = `Choose the reasoning effort an agentic assistant should use for the next user message, once for each model asked. It reads files, runs tools and edits things, not only code. Pick the cheapest effort that still does the job well.
+const DECISION_TASK = `Choose the reasoning effort that an agentic AI assistant should use to handle the next message, for each model asked about. The assistant can read files, run tools and edit things, not only write code. Judge the scope and difficulty of the work the message asks for, taking the recent conversation into account. Pick the cheapest effort that still does the job well for that model.
 
 ${EFFORT_RULES}`
 const DECISION_QUESTIONS = Object.fromEntries(
-  JUDGED.map(m => [`effort_${m}`, { type: 'choice', instructions: `Which effort should ${MODEL_LEVELS[m].about} use for the next message?`, criteria: MODEL_LEVELS[m].levels }]),
+  JUDGED.map(m => [`effort_${m}`, { type: 'choice', instructions: MODEL_LEVELS[m].instructions, criteria: MODEL_LEVELS[m].levels }]),
 )
 
 /** The skill or custom command a typed "/name args" runs, or nothing for the app's own commands and effortless's. */
@@ -1056,7 +1062,7 @@ async function modelIs($: EngineInterface, id: string) {
     // A judged pick takes the new model's own answer, through the person's settings; a level they set or named stays.
     // Also with Auto off, so turning it back on never brings the old model's answer. A decision model's why is how sure
     // it was, so that is said anew; Haiku's holds for every model.
-    const answer = key !== 'fable' ? current.judged?.[key] : undefined
+    const answer = current.judged?.[key]
     const why = current.by === 'decision' || current.why === UNSURE ? (answer ? sureWords(answer) : '') : current.why
     const own = answer && !isUnsure(current.by, answer) ? { ...(await settledPick($, answer, why)), sure: answer.sure } : {}
     await choose($, { ...current, model: key, ...own })
@@ -3400,7 +3406,7 @@ async function helperEffort($: EngineInterface, prompt: string, type: string): P
  * verdict has no sure answer for that model (the helper then runs as it would without one). */
 async function helperSettled($: EngineInterface, verdict: Verdict, modelId: string): Promise<{ effort: Effort; why: string } | null> {
   const key = keyOf(modelId)
-  const answer = key && key !== 'fable' ? verdict.efforts[key] : undefined
+  const answer = key ? verdict.efforts[key] : undefined
   if (!answer || isUnsure(verdict.by, answer)) return null
   const saving = (await read($, saveUntil)) !== null
   const leaned = tipped(answer.effort, answer.sure, config.bias)
@@ -3824,14 +3830,12 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
     await update($, isJudging, () => true)
     try {
       const inUse = await sessionModel($)
-      // Fable never gets here (Auto pauses on it); the judge answers for the other three.
-      const target = inUse as JudgedModel
       const startedAt = Date.now()
-      const { verdict, tokens: judgeTokens } = await judge($, shown, target)
+      const { verdict, tokens: judgeTokens } = await judge($, shown, inUse)
       await endJudgeGlow($, 'verdict')
       const ms = Date.now() - startedAt
       const running = await read($, pick)
-      const answer = verdict?.efforts[target]
+      const answer = verdict?.efforts[inUse]
       let applied: Pick | null = null
       if (verdict && answer && !isUnsure(verdict.by, answer)) {
         const why = verdict.why || sureWords(answer)
@@ -3989,7 +3993,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
         {/* Hovering the level puts a box behind it, like the app's own effort pill. The spaces are its padding:
             Text has no padding of its own. */}
         {v.auto && v.pausedNow ? (
-          // Fable and older models: an effort change rewrites the cache there, so Auto waits.
+          // Older models: an effort change rewrites the cache there, so Auto waits.
           <Text dimColor hover={{ scope: 'effort', backgroundColor: HOVER_BOX }}>
             {' Paused '}
           </Text>
@@ -4979,7 +4983,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
           ...nav(nextButton),
         ])
       }
-      return band('⏻ Auto on or off. ⚙ all settings. Auto pauses on Fable.', 24, [
+      return band('⏻ Auto on or off. ⚙ all settings.', 24, [
         ...nav(<Button key="setup-done" variant="primary" autoFocus label="Done" onPress={() => finishSetup($)} />),
       ])
     }
