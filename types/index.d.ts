@@ -10,8 +10,8 @@ export type Spent = {
   read: number
   out: number
   byEffort: Partial<Record<Effort, { prompts: number; cost: number }>>
-  /** How often each judge decided, the time it took in all (ms), and its tokens. */
-  judge: { decision: number; haiku: number; ms: number; tokens: number }
+  /** How often each judge decided, the time it took in all (ms), and its tokens. Haiku is split by why it was asked. */
+  judge: { decision: number; haikuUnsure: number; haikuNoAnswer: number; haikuOnly: number; ms: number; tokens: number }
   /** Subagents the judge picked an effort for: how many per effort, their requests, and what those cost (weighted). */
   helpers: { runs: Partial<Record<Effort, number>>; requests: number; cost: number }
 }

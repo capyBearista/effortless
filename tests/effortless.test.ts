@@ -63,8 +63,8 @@ function judgeSays(on: On, text: string) {
 }
 
 /** What sits beneath the plugins in a session: the prompt goes through, the status line takes text. */
-function engine(on: On, env: Record<string, string> = {}, sessionModel = 'claude-opus-5-5', said: { role: string; text: string }[] = []) {
-  mock.store(on)
+function engine(on: On, env: Record<string, string> = {}, sessionModel = 'claude-opus-5-5', said: { role: string; text: string }[] = [], seed?: Record<string, unknown>) {
+  mock.store(on, seed)
   mock.env(on, env)
   on('prompt.submit', (_$, e) => ({ text: e.text }))
   on('ui.status', () => ({ value: undefined }))
@@ -348,16 +348,18 @@ describe('typed commands', () => {
     return filled
   }
 
-  test('an effort click sets the effort at once and also types /effort for the app', async ($, on) => {
+  test('an effort click sets the effort at once and runs /effort for the app', async ($, on) => {
     engine(on)
     const filled = box(on, '')
+    const ran = recordCommands(on)
     const sent = recordSteps(on)
     const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
 
     await ui.press({ key: 'e-high' })
     await step($, 'medium')
 
-    expect(filled).toEqual(['/effort high'])
+    expect(ran).toEqual(['/effort high'])
+    expect(filled).toEqual([])
     expect(sent[0].effort).toBe('high')
     await ui.unmount()
   })
@@ -561,7 +563,7 @@ describe('footer text', () => {
     expect(text).toContain('1 prompts, 1 requests, cost about 5.1k')
     expect(text).toContain('cache reads 20 %, cache writes 20 %, output 59 %')
     expect(text).toContain('Low 1, average 5.1k')
-    expect(text).toContain('Judge: decision models 0, Haiku 1')
+    expect(text).toContain('Judge: decision models 0, Haiku after unsure 0, after no answer 0, Haiku only 1')
     expect(text).not.toContain('saved about')
   })
 
@@ -684,7 +686,7 @@ describe('named level', () => {
 describe('state from an older version', () => {
   test('the pre-0.2.0 tally { requests, actual, baseline } reads as an empty tally, never throws', () => {
     const old = { requests: 3, actual: 900, baseline: 1500 } as never
-    expect(asSpent(old).judge).toEqual({ decision: 0, haiku: 0, ms: 0, tokens: 0 })
+    expect(asSpent(old).judge).toEqual({ decision: 0, haikuUnsure: 0, haikuNoAnswer: 0, haikuOnly: 0, ms: 0, tokens: 0 })
     expect(asSpent(old).byEffort).toEqual({})
     expect(() => savedText(old)).not.toThrow()
     expect(asSpent(undefined).prompts).toBe(0)
@@ -947,7 +949,7 @@ describe('band', () => {
 
       await ui.press({ key: 'e-xhigh' })
       expect((await ui.find({ key: 'auto' }))?.text).toContain('Auto off')
-      expect(ran).toEqual([])
+      expect(ran).toEqual(['/effort xhigh'])
 
       await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
       await step($, 'xhigh')
@@ -960,6 +962,102 @@ describe('band', () => {
       await ui.unmount()
     })
   }
+})
+
+describe('a level picked by hand, in the minimal look', () => {
+  test('the lit level says manual on its button', async ($, on) => {
+    engine(on)
+    recordCommands(on)
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
+    await ui.press({ key: 'e-low' })
+    expect(JSON.stringify(await ui.find({ key: 'e-low' }))).toContain('"label":"low · manual"')
+    await ui.unmount()
+  })
+})
+
+describe('a level clicked while the judge runs', () => {
+  test('the verdict is dropped and the pick stays at the click', async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    recordCommands(on)
+    let started!: () => void
+    const judging = new Promise<void>(resolve => (started = resolve))
+    let release!: () => void
+    const released = new Promise<void>(resolve => (release = resolve))
+    on('model.complete', async () => {
+      started()
+      await released
+      return { value: { isAnswered: true as const, text: '{"haiku":"high","sonnet":"high","opus":"high","why":"x"}', usage: USAGE } }
+    })
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
+    const submitted = $.prompt.submit({ text: 'hard task', wait: false, origin: { kind: 'composer' } })
+    await judging
+    await ui.press({ key: 'e-low' })
+    release()
+    await submitted
+
+    expect(JSON.stringify(await ui.find({ key: 'e-low' }))).toContain('"variant":"primary"')
+    expect(JSON.stringify(await ui.find({ key: 'e-high' }))).not.toContain('"variant":"primary"')
+    expect((await ui.find({ key: 'auto' }))?.text).toContain('Auto off')
+    // The prompt still counts for the judge, though Auto did not steer it.
+    expect(String((await $.command.run({ command: 'effortless', args: 'stats' })).text)).toContain('Haiku only 1')
+    await ui.unmount()
+  })
+})
+
+describe('the band follows the settings', () => {
+  test('save mode on caps a pick already made: the band and the next request say medium', async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    judgeSays(on, '{"haiku":"max","sonnet":"max","opus":"max","why":"hard"}')
+    const sent = recordSteps(on)
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
+    await $.prompt.submit({ text: 'hard task', wait: false, origin: { kind: 'composer' } })
+    expect(JSON.stringify(await ui.find({ key: 'e-max' }))).toContain('"variant":"primary"')
+
+    await $.command.run({ command: 'effortless', args: 'save' })
+    expect(JSON.stringify(await ui.find({ key: 'e-medium' }))).toContain('"variant":"primary"')
+    await step($, 'high')
+    expect(sent[0].effort).toBe('medium')
+    await ui.unmount()
+  })
+
+  test('save mode off brings the judge\'s answer back: the band and the next request say max again', async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    judgeSays(on, '{"haiku":"max","sonnet":"max","opus":"max","why":"hard"}')
+    const sent = recordSteps(on)
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
+    await $.prompt.submit({ text: 'hard task', wait: false, origin: { kind: 'composer' } })
+    await $.command.run({ command: 'effortless', args: 'save' })
+    expect(JSON.stringify(await ui.find({ key: 'e-medium' }))).toContain('"variant":"primary"')
+    await $.command.run({ command: 'effortless', args: 'save' })
+    expect(JSON.stringify(await ui.find({ key: 'e-max' }))).toContain('"variant":"primary"')
+    await step($, 'high')
+    expect(sent[0].effort).toBe('max')
+    await ui.unmount()
+  })
+
+  test('a lower Max saved in the settings is in force at the next start: the pick comes down with it', async ($, on) => {
+    // The Max saved from the settings (kept in the store, as a host that refuses the /config row keeps it); the setup
+    // guide is done, so the next start does not open it over the band.
+    engine(on, {}, 'claude-opus-5-5', [], { savedSettings: { effortCeiling: 'medium' }, setupDone: true })
+    mock.clock(on)
+    on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
+    on('command.register', () => ({ value: undefined }) as never)
+    judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"hard"}')
+    const sent = recordSteps(on)
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
+    await $.prompt.submit({ text: 'hard task', wait: false, origin: { kind: 'composer' } })
+    expect(JSON.stringify(await ui.find({ key: 'e-high' }))).toContain('"variant":"primary"')
+
+    // A saved setting reloads the plugin: its start reads the kept settings, and the pick is settled again under them.
+    await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true } as never)
+    expect(JSON.stringify(await ui.find({ key: 'e-medium' }))).toContain('"variant":"primary"')
+    await step($, 'high')
+    expect(sent[0].effort).toBe('medium')
+    await ui.unmount()
+  })
 })
 
 describe('review fixes', () => {
@@ -2790,6 +2888,16 @@ describe('dashboard', () => {
     expect(weighted({ input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 1000, cache_creation_input_tokens: 4 })).toBe(10 + 10 + 100 + 5)
   })
 
+  test('the word says manual for a level picked by hand and kept for a kept one; Auto off says Off unless a level was picked', () => {
+    const base = { auto: true, paused: false, judging: false, effort: 'medium' as const, cacheNow: null, contextPercent: null, reason: '', last: null }
+    expect(dashboardLines({ ...base, manual: true }).what).toBe('Medium · manual')
+    expect(dashboardLines({ ...base, manual: true, auto: false }).what).toBe('Medium · manual')
+    expect(dashboardLines({ ...base, kept: true }).what).toBe('Medium · kept')
+    expect(dashboardLines({ ...base, auto: false }).what).toBe('Off')
+    expect(dashboardLines({ ...base, auto: false, kept: true }).what).toBe('Off')
+    expect(dashboardLines({ ...base, judging: true, manual: true }).what).toBe('Deciding…')
+  })
+
   test('the effort word and the figures after it are drawn apart, so the figures can be cut and the word stays whole', () => {
     const base = { auto: true, paused: false, judging: false, effort: 'low' as const, cacheNow: 42, contextPercent: null, reason: '', last: null }
     expect(dashboardLines(base).what).toBe('Low')
@@ -2807,7 +2915,54 @@ describe('dashboard', () => {
     expect(flashColor(1800)).toBe('#d4d4d8')
   })
 
-  test('desktop: Auto switched off does not light the word up: it turns Off in white', DASH, async ($, on) => {
+  test('desktop: a level button sets that level by hand: the app runs /effort, Auto goes off, and the next request keeps the pick', DASH, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    const ran = recordCommands(on)
+    const sent = recordSteps(on)
+    const said: string[] = []
+    on('ui.toast', (_$, e) => {
+      said.push(String((e as { text?: string }).text ?? e))
+      return { value: undefined } as never
+    })
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    const band = await $.ui.mount(DESK_BAND)
+
+    await band.press({ key: 'dash-e-xhigh' })
+    expect(await drawn(band)).toContain('"children":["XHigh · manual"]')
+    expect(await drawn(band)).toContain('"alt":"Auto off"')
+    expect(ran).toEqual(['/effort xhigh'])
+
+    // The app now runs at XHigh: that is the pick, not a change of the person's to be read back (no toast, no reset).
+    await step($, 'xhigh')
+    expect(sent[0].effort).toBe('xhigh')
+    expect(said.join(' ')).not.toContain('Auto is off')
+    expect(await drawn(band)).toContain('"children":["XHigh · manual"]')
+    await band.unmount()
+  })
+
+  test('desktop: where the app refuses the run, /effort goes into the prompt box for the person to send', DASH, async ($, on) => {
+    // No host answers the /effort run, so the app refuses it and the command goes to the prompt box instead.
+    engine(on)
+    mock.clock(on)
+    const filled: string[] = []
+    on('prompt.read', () => ({ value: { text: '', cursor: 0 } }) as never)
+    on('prompt.fill', (_$, e) => {
+      filled.push(e.text)
+      return { isFilled: true } as never
+    })
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    const band = await $.ui.mount(DESK_BAND)
+
+    await band.press({ key: 'dash-e-high' })
+    expect(filled).toEqual(['/effort high'])
+    expect(await drawn(band)).toContain('"children":["High · manual"]')
+    await band.unmount()
+  })
+
+  test('desktop: a level picked by hand says manual in the word, and does not light up', DASH, async ($, on) => {
     engine(on)
     mock.clock(on)
     on('prompt.read', () => ({ value: { text: '', cursor: 0 } }) as never)
@@ -2816,12 +2971,13 @@ describe('dashboard', () => {
     await closeSetup($, DESK_BAND)
     const first = await $.ui.mount(DESK_BAND)
     await first.unmount()
-    // Picking an effort by hand turns Auto off, so the word becomes Off: the switch says so, no flash.
+    // Picking an effort by hand turns Auto off and runs the app's /effort: the person's own switch, not a verdict, so the
+    // word changes without the flash.
     const rows = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
     await rows.press({ key: 'e-low' })
     await rows.unmount()
     const band = await $.ui.mount(DESK_BAND)
-    expect(await drawn(band)).toContain('"color":"text","bold":true,"weight":"semibold"},"children":["Off"]')
+    expect(await drawn(band)).toContain('"color":"text","bold":true,"weight":"semibold"},"children":["Low · manual"]')
     await band.unmount()
   })
 
@@ -3767,6 +3923,46 @@ describe('decision models (fork)', () => {
     await ui.unmount()
   })
 
+  test('a kept level says kept in the word, so it does not read as a verdict that never came', { options: { decisionModels: CHAIN, openrouterKey: 'or-k', layout: 'default' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    on('model.complete', () => ({ value: { isAnswered: false as const } }) as never)
+    let says = decisionReply('high', 0.95)
+    decisions(on, () => ({ status: 200, text: says }))
+    recordSteps(on)
+    on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
+    on('command.register', () => ({ value: undefined }) as never)
+    await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
+    const guide = await $.ui.mount(DESK_BAND)
+    await guide.press({ key: 'setup-close' })
+    await guide.unmount()
+    const band = await $.ui.mount(DESK_BAND)
+    await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
+    expect(await drawn(band)).toContain('"children":["High"]')
+
+    says = decisionReply('low', 0.3)
+    await $.prompt.submit({ text: 'and what about the lexer', wait: false, origin: { kind: 'composer' } })
+    expect(await drawn(band)).toContain('"children":["High · kept"]')
+    await band.unmount()
+  })
+
+  test('a kept level says kept on its button in the minimal look', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    on('model.complete', () => ({ value: { isAnswered: false as const } }) as never)
+    let says = decisionReply('high', 0.95)
+    decisions(on, () => ({ status: 200, text: says }))
+    recordSteps(on)
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
+    await $.prompt.submit({ text: 'refactor the parser', wait: false, origin: { kind: 'composer' } })
+    expect(JSON.stringify(await ui.find({ key: 'e-high' }))).toContain('"label":"high"')
+
+    says = decisionReply('low', 0.3)
+    await $.prompt.submit({ text: 'and what about the lexer', wait: false, origin: { kind: 'composer' } })
+    expect(JSON.stringify(await ui.find({ key: 'e-high' }))).toContain('"label":"high · kept"')
+    await ui.unmount()
+  })
+
   test('unsure on the first prompt: the effort kept is the app\'s own, within Min and Max', { options: { decisionModels: CHAIN, openrouterKey: 'or-k', effortFloor: 'high' } } as never, async ($, on) => {
     engine(on)
     mock.clock(on)
@@ -3797,7 +3993,87 @@ describe('decision models (fork)', () => {
     await ui.unmount()
   })
 
-  test('with the haiku judge picked, decision models are not asked', { options: { judge: 'haiku', decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+  /** The last verdict line from /effortless debug, and the judge's counts from /effortless stats. */
+  const debugLine = async ($: Engine) => String((await $.command.run({ command: 'effortless', args: 'debug' })).text)
+  const statsLine = async ($: Engine) => String((await $.command.run({ command: 'effortless', args: 'stats' })).text)
+
+  test('a decision model sure of its answer decides alone: Haiku is not asked, and the stats count a decision', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
+    decisions(on, () => ({ status: 200, text: decisionReply('low', 0.9) }))
+    recordSteps(on)
+    await $.prompt.submit({ text: 'rename it', wait: false, origin: { kind: 'composer' } })
+    expect(asked.length).toBe(0)
+    expect(await statsLine($)).toContain('Judge: decision models 1, Haiku after unsure 0, after no answer 0, Haiku only 0')
+  })
+
+  test('no decision model listed: Haiku is the judge alone, the verdict line says only judge, and the stats count it', async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
+    recordSteps(on)
+    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
+    expect(await debugLine($)).toContain('last verdict: haiku (only judge): ')
+    expect(await statsLine($)).toContain('Judge: decision models 0, Haiku after unsure 0, after no answer 0, Haiku only 1')
+  })
+
+  test('a decision model unsure of the effort: Haiku decides, the verdict line gives the sureness, and the stats count Haiku after unsure', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"x"}')
+    decisions(on, () => ({ status: 200, text: decisionReply('low', 0.3) }))
+    recordSteps(on)
+    await $.prompt.submit({ text: 'kanske', wait: false, origin: { kind: 'composer' } })
+    expect(await debugLine($)).toContain('last verdict: haiku (unsure 0.30): ')
+    expect(await statsLine($)).toContain('Judge: decision models 0, Haiku after unsure 1, after no answer 0, Haiku only 0')
+  })
+
+  test('a decision model silent on the model in use: Haiku decides, the verdict line says no answer for it, and the stats count Haiku after unsure', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    judgeSays(on, '{"haiku":"high","sonnet":"high","opus":"high","why":"x"}')
+    decisions(on, () => ({ status: 200, text: decisionReply({ haiku: 'low' }) }))
+    recordSteps(on)
+    await $.prompt.submit({ text: 'kanske', wait: false, origin: { kind: 'composer' } })
+    expect(await debugLine($)).toContain('last verdict: haiku (no answer for opus): ')
+    expect(await statsLine($)).toContain('Judge: decision models 0, Haiku after unsure 1, after no answer 0, Haiku only 0')
+  })
+
+  test('every decision model fails: Haiku decides, the verdict line gives the last reason, and the stats count Haiku after no answer', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    judgeSays(on, '{"haiku":"medium","sonnet":"medium","opus":"medium","why":"x"}')
+    decisions(on, url => (url.includes('opencode.ai') ? { status: 500, text: 'down' } : { status: 429, text: 'slow down' }))
+    recordSteps(on)
+    await $.prompt.submit({ text: 'fixa buggen', wait: false, origin: { kind: 'composer' } })
+    expect(await debugLine($)).toContain('last verdict: haiku (chain: OpenRouter typesafe/jev-1.13 is rate limited (429)): ')
+    expect(await statsLine($)).toContain('Judge: decision models 0, Haiku after unsure 0, after no answer 1, Haiku only 0')
+  })
+
+  test('a decision model unsure of the effort and Haiku with no answer: the decision model counts, and the line says Haiku gave no answer', { options: { decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    on('model.complete', () => ({ value: { isAnswered: false as const } }) as never)
+    decisions(on, () => ({ status: 200, text: decisionReply('low', 0.3) }))
+    recordSteps(on)
+    await $.prompt.submit({ text: 'kanske', wait: false, origin: { kind: 'composer' } })
+    expect(await debugLine($)).toContain('last verdict: jev-1.13-free: ')
+    expect(await debugLine($)).toContain(' (unsure 0.30, Haiku gave no answer) -> ')
+    expect(await statsLine($)).toContain('Judge: decision models 1, Haiku after unsure 0, after no answer 0, Haiku only 0')
+  })
+
+  test('Haiku the only judge gives no answer: nothing is counted, and the line says no verdict', async ($, on) => {
+    engine(on)
+    mock.clock(on)
+    on('model.complete', () => ({ value: { isAnswered: false as const } }) as never)
+    recordSteps(on)
+    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
+    expect(await debugLine($)).toContain('last verdict: no verdict')
+    expect(await statsLine($)).toContain('nothing measured yet')
+  })
+
+  test('with the haiku judge picked, decision models are not asked',{ options: { judge: 'haiku', decisionModels: CHAIN, openrouterKey: 'or-k' } } as never, async ($, on) => {
     engine(on)
     mock.clock(on)
     const asked = judgeSays(on, '{"haiku":"low","sonnet":"low","opus":"low","why":"x"}')
