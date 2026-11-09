@@ -21,10 +21,9 @@ export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // 80k requests of real Claude Code use, cache reads are about 76% of a session's cost, cache writes 16% and output 8%: effort
 // mostly changes how many tool calls a prompt makes, not what one answer writes, so all four are counted.
 const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
-// Changing effort between two requests keeps the prompt cache on these models: Haiku 5.5 measured 2026-11-03 (a low -> max
-// change read the whole cache), Fable 5.1 per Claude Code's docs from 2.1.260 (not measured here). Older Opus rewrote 56-100%
-// of the cache (measured), which costs more than any effort can save. Haiku 4.5 takes no effort at all.
-export const cacheSafe = (modelId: string) => /(opus|sonnet|haiku)-5-5|fable-5-1\b/.test(modelId)
+// shortcut: every Claude family is taken to keep the prompt cache when effort changes, as Opus/Sonnet/Haiku 5.5 and Fable 5.1+
+// do per Claude Code's docs; older models (which rewrote it) and no-cache setups are not detected (README, Models).
+export const cacheSafe = (modelId: string) => /opus|sonnet|haiku|fable/.test(modelId)
 // The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
 let ACCENT = accent()
 /** Takes the theme the settings name; the accent and every drawing follow it. */
@@ -543,6 +542,11 @@ export function parseTypesafeKey(text: string): string | undefined {
   return parseEnvLine(text, 'TYPESAFE_API_KEY')
 }
 
+/** A typed or pasted TypeSafe key: a TYPESAFE_API_KEY=… line gives its value (none when empty), else the text itself. */
+function typedTypesafeKey(text: string): string | undefined {
+  return /^\s*TYPESAFE_API_KEY\s*=/.test(text) ? parseTypesafeKey(text) : text
+}
+
 /** A NAME=value line's value in an .env file's text, quotes taken off. */
 export function parseEnvLine(text: string, name: string): string | undefined {
   const value = text.match(new RegExp(`^\\s*${name}\\s*=\\s*(.*?)\\s*$`, 'm'))?.[1].replace(/^['"]|['"]$/g, '')
@@ -871,7 +875,7 @@ async function askChain(
     const name = routeName(route)
     const draft = route.provider !== 'zen' ? draftKeys[route.provider]?.trim() : undefined
     // A pasted TYPESAFE_API_KEY=… line counts as its value, as when it is saved.
-    const key = (route.provider === 'typesafe' && draft ? (parseTypesafeKey(draft) ?? draft) : draft) || (await routeKey($, route))
+    const key = (route.provider === 'typesafe' && draft ? typedTypesafeKey(draft) : draft) || (await routeKey($, route))
     if (route.provider !== 'zen' && !key) {
       skipped = skipped ?? `${name} has no key`
       misses.push(`${routeLabel(route)}: no key`)
@@ -1086,7 +1090,8 @@ async function modelIs($: EngineInterface, id: string) {
     // it was, so that is said anew; Haiku's holds for every model.
     const answer = current.judged?.[key]
     const why = current.by === 'decision' || current.why === UNSURE ? (answer ? sureWords(answer) : '') : current.why
-    const own = answer && !isUnsure(current.by, answer) ? { ...(await settledPick($, answer, why)), sure: answer.sure } : {}
+    // No sure answer for the new model (and not the person's own level): the level is kept, and the band says so.
+    const own = answer && !isUnsure(current.by, answer) ? { ...(await settledPick($, answer, why)), sure: answer.sure } : current.judged ? { why: UNSURE } : {}
     await choose($, { ...current, model: key, ...own })
   }
 }
@@ -1272,7 +1277,7 @@ async function countPrompt($: EngineInterface, effort: Effort | undefined, kind:
       haikuNoAnswer: t.judge.haikuNoAnswer + (kind === 'chain' ? 1 : 0),
       haikuOnly: t.judge.haikuOnly + (kind === 'only' ? 1 : 0),
       ms: t.judge.ms + (kind ? ms : 0),
-      tokens: t.judge.tokens + judgeTokens,
+      tokens: t.judge.tokens + (kind ? judgeTokens : 0),
     }
     if (!effort) return { ...t, judge: judged }
     const bucket = t.byEffort[effort] ?? { prompts: 0, cost: 0 }
@@ -2005,6 +2010,7 @@ async function saveSetting($: EngineInterface, field: keyof typeof SETTING_FIELD
   }
   // The keys are the app's secrets: never in raw, kept as they were.
   config = { ...readConfig(raw), typesafeKey: config.typesafeKey, openrouterKey: config.openrouterKey }
+  await resettle($)
   applyTheme()
   $.ui.invalidate('ui.render')
 }
@@ -2094,13 +2100,13 @@ async function saveOpenRouterKey($: EngineInterface, key: string): Promise<boole
  * A key pasted in the panel goes to ~/.config/jev/.env: a plugin cannot write the app's secret settings. From then on
  * that file wins over an older key in the settings.
  */
-async function saveTypesafeKey($: EngineInterface, key: string) {
-  const clean = key.trim()
-  if (!clean) return
+async function saveTypesafeKey($: EngineInterface, key: string): Promise<boolean> {
+  const clean = typedTypesafeKey(key)?.trim()
+  if (!clean) return false
   const home = (await envUserProfile($)) ?? (await envHome($))
   if (!home) {
     $.ui.toast('effortless: no home folder found to save the key in.')
-    return
+    return false
   }
   const path = `${home}/.config/jev/.env`
   const before = await $.fs.read(path).catch(() => '')
@@ -2108,7 +2114,7 @@ async function saveTypesafeKey($: EngineInterface, key: string) {
     await $.fs.write(path, withTypesafeKey(typeof before === 'string' ? before : '', clean))
   } catch (error) {
     $.ui.toast(`effortless: could not save the key: ${(error instanceof Error ? error.message : String(error)).slice(0, 120)}`)
-    return
+    return false
   }
   await $.store.set('keyFromFile', true)
   keyFromFile = true
@@ -2117,6 +2123,7 @@ async function saveTypesafeKey($: EngineInterface, key: string) {
   warned.clear()
   $.ui.toast('effortless: TypeSafe key saved. Decision models use it from the next message.')
   $.ui.invalidate('ui.render')
+  return true
 }
 
 // Fork: decision is where a decision model runs (Zen, OpenRouter or TypeSafe); decision-openrouter and decision-typesafe take that key.
@@ -2430,9 +2437,7 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
   const effortTip = !v.auto
     ? 'Auto is off: the effort stays as you set it. The power button turns Auto on.'
     : v.pausedNow
-      ? v.modelNow === 'haiku'
-        ? 'This model runs without an effort level, so Auto has nothing to set.'
-        : 'Auto waits on this model: an effort change would rewrite its prompt cache.'
+      ? 'Auto waits on this model: an effort change would rewrite its prompt cache.'
       : !effortOf(v)
         ? 'This model runs without an effort level, so Auto has nothing to set.'
       : [
@@ -3970,7 +3975,8 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       await countPrompt($, pickedMeanwhile ? undefined : applied?.effort, verdict ? (judged.haikuWhy?.kind ?? 'decision') : undefined, ms, judgeTokens)
       void proof($, `judged in ${ms} ms: ${lastVerdictLine} for "${e.text.slice(0, 50)}"`)
       $.ui.invalidate('ui.render')
-      if (applied && !pickedMeanwhile) {
+      // A click during the awaits above also keeps its pick (the stats and the proof line above still count the verdict).
+      if (applied && handChanges === handsBefore) {
         // Mid-turn, a lower verdict would cut the running task's effort for its remaining steps: it waits for the
         // turn to end (the queued message may run as a turn of its own). A higher one helps the task, so it applies.
         if (midTurn && running && EFFORTS.indexOf(applied.effort) < EFFORTS.indexOf(running.effort)) {
@@ -5040,7 +5046,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
               onSubmit={async (v: string) => {
                 if (!v.trim()) return
                 await update($, setupDraft, d => ({ ...d, key: undefined }))
-                await saveTypesafeKey($, v)
+                if (!(await saveTypesafeKey($, v))) return
                 await update($, setupDraft, d => ({ ...d, decisionModels: withTypesafeRoute(d.decisionModels) }))
                 await goSetup($, 'lean')
               }} />

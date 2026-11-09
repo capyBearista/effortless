@@ -170,9 +170,7 @@ all numbers and limits are in [bench/RESULTS.md](bench/RESULTS.md).
 
 ## Models
 
-Effort only changes on Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.1, where a change of effort keeps the prompt cache. Fable 5.1 needs Claude Code 2.1.260 or later. On older models a change of effort between requests rewrote most of the prompt cache, which costs more than it saves, so Auto pauses there and the footer says `Paused`. Haiku 4.5 takes no effort setting, so Auto pauses there too.
-
-On Bedrock, Google Cloud's Agent Platform, a Claude apps gateway, with `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` set, or in a HIPAA organisation, no model keeps the prompt cache when effort changes. effortless does not detect those setups, so Auto still changes the effort there.
+effortless assumes every Opus, Sonnet, Haiku and Fable release keeps the prompt cache when effort changes. Claude Code's docs say that holds for Opus, Sonnet and Haiku 5.5 and for Fable 5.1 and later. effortless does not check the version, so on older models, which rewrite the cache, and on Bedrock, Google Cloud's Agent Platform, a Claude apps gateway, with `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` set, or in a HIPAA organisation, Auto still changes effort and each change can rewrite the cache. Models outside those four families pause Auto, and the footer says `Paused`.
 
 ## Split view
 
