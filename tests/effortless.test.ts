@@ -6,7 +6,7 @@ import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { hopTimeout, MAX_ROUTES, movedEarlier, parseDecisionModels, routeLabel, routeShortName, withoutRoute, withRoute } from '../hooks/decisions'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
-import { afterPrompt, currentStep, phaseAtTurnEnd, progressShare, progressShows, progressTitle, soundArgv, stepNumber, stepsFromTodos, withTaskCreated, withTaskUpdated } from '../hooks/progress'
+import { progressShare, stepsFromTodos, withTaskCreated, withTaskUpdated } from '../hooks/progress'
 
 
 // Most tests below were written for the footer's buttons: they run in the minimal look unless they name another.
@@ -2589,8 +2589,7 @@ describe('settings panel', () => {
     await panel.press({ key: 'settings-card-show' })
     await panel.press({ key: 'show-box-timer' })
     await panel.press({ key: 'show-box-reason' })
-    expect(await panel.find({ key: 'show-box-sounds' })).toBeUndefined()
-    // The judge line starts off, so its box switches it on; the cache timer goes off. No progress, sounds or alert.
+    // The judge line starts off, so its box switches it on; the cache timer goes off. No alert.
     // The alerts are in the Handoff card, beside when the context alert shows.
     expect(await panel.find({ key: 'show-box-swamp' })).toBeUndefined()
     expect(set).toEqual([])
@@ -2614,7 +2613,7 @@ describe('settings panel', () => {
 
 describe('switching parts off', () => {
   test('readConfig keeps only parts that can be switched off; the judge-down alert is not among them', () => {
-    expect(readConfig({ hide: 'swamp, handoff,bogus,down,progress' }).hide).toEqual(['swamp', 'handoff', 'progress'])
+    expect(readConfig({ hide: 'swamp, handoff,bogus,down' }).hide).toEqual(['swamp', 'handoff'])
   })
 
   test('a hidden handoff button is not in the footer; a switched-off context alert does not show', { options: { hide: 'handoff,swamp' } } as never, async ($, on) => {
@@ -2646,16 +2645,13 @@ describe('the command file', () => {
 })
 
 
-// The progress bar is switched off for now (hooks/progress.tsx stays for later): its rules only.
-describe('progress bar rules', () => {
+// The task step list the agent panel follows: its rules.
+describe('task step rules', () => {
   const todos = (statuses: ('pending' | 'in_progress' | 'completed')[]) =>
     statuses.map((status, i) => ({ content: `Step ${i + 1}`, activeForm: `Doing step ${i + 1}`, status }))
-  test('the steps: share, number and the one named', () => {
+  test('the steps: share', () => {
     const steps = stepsFromTodos(todos(['completed', 'in_progress', 'pending', 'pending']))
     expect(progressShare(steps)).toBe(1.5 / 4)
-    expect(stepNumber(steps)).toBe(2)
-    expect(currentStep(steps)?.doing).toBe('Doing step 2')
-    expect(stepNumber(stepsFromTodos(todos(['completed', 'completed', 'completed'])))).toBe(3)
     expect(progressShare([])).toBe(0)
   })
 
@@ -2665,43 +2661,6 @@ describe('progress bar rules', () => {
     steps = withTaskUpdated(steps, { taskId: '1', status: 'in_progress' })
     expect(steps.map(s => [s.id, s.status, s.doing])).toEqual([['1', 'in_progress', 'Reading'], ['2', 'pending', 'Write']])
     expect(withTaskUpdated(steps, { taskId: '2', status: 'deleted' }).map(s => s.id)).toEqual(['1'])
-  })
-
-  test('a turn ends done, asking or paused; too short a list ends the bar', () => {
-    const q = endsOnQuestion
-    const p = (s: ('pending' | 'in_progress' | 'completed')[]) => ({ phase: 'working' as const, steps: stepsFromTodos(todos(s)) })
-    expect(phaseAtTurnEnd(p(['completed', 'completed', 'completed']), { reason: 'answer', answer: 'All done.' }, q)).toBe('done')
-    expect(phaseAtTurnEnd(p(['completed', 'pending', 'pending']), { reason: 'answer', answer: 'Should I go on?' }, q)).toBe('asking')
-    expect(phaseAtTurnEnd(p(['completed', 'pending', 'pending']), { reason: 'aborted', answer: '' }, q)).toBe('paused')
-    expect(phaseAtTurnEnd(p(['completed', 'pending']), { reason: 'answer', answer: '' }, q)).toBeNull()
-  })
-
-  test('a prompt carries an asking or paused task on and ends a finished one; slash commands change nothing', () => {
-    const steps = stepsFromTodos(todos(['completed', 'pending', 'pending']))
-    const said = { text: 'yes', origin: { kind: 'composer' } }
-    expect(afterPrompt({ phase: 'asking', steps }, said)?.phase).toBe('working')
-    expect(afterPrompt({ phase: 'paused', steps }, said)?.phase).toBe('working')
-    expect(afterPrompt({ phase: 'done', steps }, said)).toBeNull()
-    expect(afterPrompt({ phase: 'done', steps }, { text: '/effortless debug', origin: { kind: 'composer' } })?.phase).toBe('done')
-  })
-
-  test('where it shows, what it says, and when the judge calls a turn big', () => {
-    const steps = stepsFromTodos(todos(['completed', 'in_progress', 'pending']))
-    expect(progressShows({ phase: 'working', steps }, null, 'active')).toBe(true)
-    expect(progressShows({ phase: 'working', steps }, null, 'resting')).toBe(false)
-    expect(progressShows({ phase: 'done', steps }, null, 'active')).toBe(true)
-    expect(progressShows({ phase: 'paused', steps }, null, 'resting')).toBe(true)
-    expect(progressShows({ phase: 'working', steps }, 'Step 1\nStep 2\nStep 3', 'active')).toBe(false)
-    expect(progressShows({ phase: 'working', steps: steps.slice(0, 2) }, null, 'active')).toBe(false)
-    expect(progressTitle({ phase: 'asking', steps })).toBe('Waiting for your answer · step 2 of 3')
-    expect(progressTitle({ phase: 'done', steps })).toBe('Done · all 3 steps')
-  })
-
-  test('Windows plays the chime with PowerShell; elsewhere the app plays it', () => {
-    const argv = soundArgv('C:\\Users\\x\\plugins\\effortless', 'sounds/done.wav')
-    expect(argv?.[0]).toBe('powershell.exe')
-    expect(argv?.join(' ')).toContain("SoundPlayer 'C:\\Users\\x\\plugins\\effortless\\sounds\\done.wav'")
-    expect(soundArgv('/Users/x/.claude/plugins/effortless', 'sounds/done.wav')).toBeNull()
   })
 
 })
@@ -3693,7 +3652,7 @@ describe('agent panel', () => {
     expect(relPath('/elsewhere/a.ts', '/proj')).toBeNull()
     expect(importsOf('hooks/a.tsx', "import x from './b'\nimport type { T } from '../types'")).toEqual(['hooks/b', 'types'])
     expect(importsOf('pkg/mod.py', 'from .util import x\nimport os')).toEqual(['pkg/util', 'os'])
-    expect(moduleOf('docs/agent-panel/mockups/x.mjs')).toBe('docs/agent-panel')
+    expect(moduleOf('tools/render-band/out/x.mjs')).toBe('tools/render-band')
     expect(moduleOf('README.md')).toBe('project')
     let files = withTouch([], 'hooks/a.ts', false, 'main', 1, ['types'])
     files = withTouch(files, 'types/index.d.ts', true, 'a1', 2, [])

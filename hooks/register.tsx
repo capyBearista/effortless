@@ -10,11 +10,11 @@ import { accent, onKnob, setLight, setMatchApp, setTheme, themedEls, type ThemeN
 import { PILL_H, stepsFromTodos, thinkingSvg, THINK_W, withTaskCreated, withTaskUpdated } from './progress'
 
 // The ladders the two sliders walk, cheapest first.
-export const MODELS: { key: ModelKey; label: string; long: string; id: string }[] = [
-  { key: 'haiku', label: 'Haiku', long: 'Haiku 5.5', id: 'claude-haiku-5-5' },
-  { key: 'sonnet', label: 'Sonnet', long: 'Sonnet 5.5', id: 'claude-sonnet-5-5' },
-  { key: 'opus', label: 'Opus', long: 'Opus 5.5', id: 'claude-opus-5-5' },
-  { key: 'fable', label: 'Fable', long: 'Fable 5.1', id: 'claude-fable-5-1' },
+export const MODELS: { key: ModelKey; label: string }[] = [
+  { key: 'haiku', label: 'Haiku' },
+  { key: 'sonnet', label: 'Sonnet' },
+  { key: 'opus', label: 'Opus' },
+  { key: 'fable', label: 'Fable' },
 ]
 export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // What one token costs relative to an uncached input token, the same ratios on every Claude model. Measured over
@@ -32,7 +32,6 @@ function applyTheme() {
   ACCENT = accent()
   BRAND_BG = tintHex('#15121f')
   BRAND_EDGE = tintHex('#4a3f80')
-  BRAND_HEAD = tintHex('#221c3a')
   FLASH_COLOR = tintHex('#9b7bff')
   // The panel greys lean blue beside the violet; with Claude orange they are the app's own neutral greys.
   const neutral = config.theme !== 'violet'
@@ -68,8 +67,6 @@ async function refreshAppearance($: EngineInterface) {
 }
 let BRAND_BG = '#15121f'
 let BRAND_EDGE = '#4a3f80'
-// The settings panel's header bar: a shade lighter than the panel, so it reads as a title bar.
-let BRAND_HEAD = '#221c3a'
 // The box behind the level while it is hovered: the grey of the app's own pills.
 let HOVER_BOX = '#2b2b2f'
 const EFFORT_LABELS: Record<Effort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
@@ -128,8 +125,6 @@ const COMPACT_FADE_MS = 450
 function compactFadeSvg(elapsedMs: number): string {
   return inPhase(`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="240" viewBox="0 0 1600 240" preserveAspectRatio="none"><style>.f{animation:f ${COMPACT_FADE_MS / 1000}s ease-out forwards}@keyframes f{from{opacity:1}to{opacity:0}}</style><rect class="f" width="1600" height="240" fill="${BOG_BG}"/></svg>`, elapsedMs)
 }
-// The person closed the cold band; it comes back the next time the cache goes cold.
-// The test pane of /effortless try pane.
 // Where a handoff is: null idle, writing (the handoff turn runs), clearing (clear and resend).
 const handoffStage = atom({ plugin: 'effortless', key: 'handoffStage' } as const, null)
 // The handoff bar above the prompt, open with the choice shown in it, or null.
@@ -694,10 +689,10 @@ export type JudgeConfig = {
 /** The swamp thresholds the settings offer, in percent of the context window. */
 export const SWAMP_STEPS = [10, 20, 30, 40, 50, 60, 70, 80] as const
 
-/** The parts of effortless a person can switch off: the footer's (setup) and the progress bar's (setup, settings).
+/** The parts of effortless a person can switch off: the footer's handoff button, the cache timer and the judge's line.
  * The context (swamp), running-low (hot) and cold-cache alerts can be switched off for good in Customize; the judge-down
  * alert always shows. Each alert also has its own ✕. */
-export const HIDEABLE = ['handoff', 'timer', 'reason', 'progress', 'sounds', 'swamp', 'hot', 'cold'] as const
+export const HIDEABLE = ['handoff', 'timer', 'reason', 'swamp', 'hot', 'cold'] as const
 export type Hideable = (typeof HIDEABLE)[number]
 const JUDGE_TIMEOUT_MS = 4000
 const JUDGE_BUDGET_MS = 8000
@@ -1176,7 +1171,6 @@ let lastRequest: { index: number; appModel: string; appEffort: unknown; model: s
 let lastTyped = ''
 // The toast about pressing Enter is shown once; on every click it is only noise.
 let toldAboutEnter = false
-let lastFooter = ''
 
 /**
  * Types a slash command into the prompt box for the person to send with Enter. A command the person

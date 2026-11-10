@@ -207,10 +207,6 @@ declare module 'claude-code' {
       appEffort: string | null
       /** The model the session runs now, as the engine last reported it (start, a switch, a request). */
       model: ModelKey | null
-      /** The task the progress bar follows, or null when there is none. */
-      progress: Progress | null
-      /** The step list the progress bar was closed for; a new list shows it again. */
-      progressHidden: string | null
       /** This chat's subagents, oldest first, for the agent panel. */
       agents: AgentRec[]
       /** The agent card opened in the panel, or 'done' for the finished ones, or null. */
