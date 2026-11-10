@@ -1,4 +1,4 @@
-# HANDOFF: effortless (capyBearista fork), version-free prompts, clean-up and a partial split of register.tsx
+# HANDOFF: effortless (capyBearista fork), version-free prompts, clean-up and a partial split of register.tsx (merged, fork.13)
 
 ## Objective
 
@@ -10,11 +10,10 @@
 
 ## Current state
 
-- **Branch:** `chore/versionless-and-cleanup`, one PR, 12 commits on top of `main` (`82007a6`). Not pushed and no PR opened yet.
+- **Status:** merged. PR #12 was merged into `main` as `9fc0e88` (merge commit). The remote branch `chore/versionless-and-cleanup` is kept. Release `1.71.0-fork.13` is in `plugin.json`, so `/plugin` can install it (`claude plugin marketplace update capybearista`, then `claude plugin update effortless@capybearista`, then restart).
 - **Verified with tools:** `bash tools/test.sh` 237 pass, 0 fail. `claude plugin validate .` passes and its `$.x.y` call set is identical to `main`. A scratch typecheck against the real plugin types matches the baseline (41 errors that were already there). No import cycles. Every `bench/hard/tasks.json` snippet occurs once in its `file`.
 - **Reviewed:** one independent Sonnet review: 0 critical, 0 important, 3 minor, 4 info. Minor items are handled or listed below.
 - **Not verified:** anything in the real desktop app, `tools/render-band` renders (they need the app), and bench runs (they read `git archive HEAD`).
-- **Version:** `.claude-plugin/plugin.json` is `1.71.0-fork.12`. No bump yet; `/plugin` will not install this branch until it is bumped.
 - `register.tsx` went from 5,339 to about 3,900 lines. New modules: `env.ts`, `config.ts`, `judge.ts`, `handoff.ts`, `stats.ts`, `usage.ts`, `svgs.ts`, `setup.ts`.
 
 ## Decisions and constraints
@@ -52,7 +51,7 @@
 ## Remaining work
 
 1. **Real-app checks** (none done): change Theme and a setting in the panel and watch the accent and band update (cross-module `export let` bindings); click a level; save mode; `/compact` with Haiku; a Fable session with `EFFORTLESS_LOG` set.
-2. **Release:** bump `plugin.json` when the user asks.
+2. **Release:** done (`fork.13`). The next bump is for the next change.
 3. **Leftovers from the review (minor):** README lines about the benchmark and the "## Models" note still name versions on purpose; decide if the "## Models" sentence should be family-level.
 4. **More split, only with a design change:** the render blocks, bars, bands and settings stay in `register.tsx` because they share atoms. Moving them needs store accessors (about 200 call sites), which is a rewrite, not a move.
 5. **Known follow-ups:** `ICE` lives in `usage.ts` while `ICE_BG` and `ICE_EDGE` are in `svgs.ts`; `tests/effortless.test.ts` has an unused `ART_COLUMNS` import; `hooks/progress.tsx` now holds only the step model and drawing helpers, so its name is misleading; `tsconfig.json` is broken; the items in `docs/known-issues.md`.
