@@ -6,7 +6,8 @@ import { EFFORTS } from './config'
 const JUDGED: readonly JudgedModel[] = ['haiku', 'sonnet', 'opus', 'fable']
 
 // The text is decisionbench's tuned prompt plus effortless's rules: on its 59 holdout Cases it scored a mean lift of 21.2 points
-// over 6 decision models, against 13.9 for the old text. The Haiku-as-judge path is not measured.
+// over 6 decision models, against 13.9 for the old text. The Haiku-as-judge path is not measured. The measured text named model versions ("Opus 5.5");
+// they were dropped afterwards and the new wording was not re-scored.
 const MODEL_LEVELS: Record<JudgedModel, { instructions: string; levels: Record<Effort, string> }> = {
   haiku: {
     instructions: 'Which effort should Claude Haiku use for the next message? Haiku is the smallest model, so it needs more effort than a larger model for the same work: the same as the work alone suggests for a quick answer or trivial step, and one level more for any real task such as a fix, a feature, an analysis or a plan.',

@@ -7,7 +7,7 @@ metadata:
 
 - bench/hard/run.sh, verify.cjs and helpers/agentic runners build their repo copy with `git archive HEAD` (run.sh:26, verify.cjs:16). A snippet's `file` is therefore the committed path, not the working copy.
 - After moving a snippet's code to another file, its `file` field must name that file. The check (all counts 1) only passes on the working copy; the bench itself only sees the new path after the commit.
-- Checked 2026-11-09 during the judge split: tasks b5, b8 and b10 moved to hooks/judge.ts.
+- Checked 2026-11-09: b5, b8 and b10 live in hooks/judge.ts; b1, b3, b4 and b6 live in hooks/usage.ts.
 
 **Why:** a split that moves bench snippets looks green in the working copy, but the bench plants from HEAD.
 **How to apply:** when a split moves code that a bench task's `find` names, update that task's `file`, rerun the count one-liner from split-rules.md, and note in the report that bench runs need the commit first.
