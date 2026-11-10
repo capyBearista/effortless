@@ -1,2 +1,3 @@
 - [Typecheck and test commands](typecheck-and-tests.md) — `tsc -p .` is broken here; use a scratch tsconfig diff; `tools/test.sh` takes about 30 s
 - [Test harness facts](test-harness-facts.md) — mock.store seeds, denied $ calls, desktop Text keys, setup guide, stale reads after await, atoms must be declared in the file that reads/updates them
+- [Bench snippet files](bench-hard-snippets.md) — bench/hard snippet `file` fields are read from git archive HEAD; they resolve only after a move is committed
