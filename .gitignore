@@ -4,3 +4,4 @@ node_modules/
 .jev-runs/
 
 .jev-runs/
+.claude/settings.local.json

@@ -1,0 +1,2 @@
+- [Typecheck and test commands](typecheck-and-tests.md) — `tsc -p .` is broken here; use a scratch tsconfig diff; `tools/test.sh` takes about 30 s
+- [Test harness facts](test-harness-facts.md) — mock.store seeds, denied $ calls, desktop Text keys, setup guide, reads stale inside a hook after await
