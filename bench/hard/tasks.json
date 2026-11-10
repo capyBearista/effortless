@@ -2,7 +2,7 @@
   {
     "id": "b1",
     "difficulty": "easy",
-    "file": "hooks/register.tsx",
+    "file": "hooks/usage.ts",
     "find": "saving && EFFORTS.indexOf(effort) > EFFORTS.indexOf('medium') ? 'medium' : effort",
     "replace": "saving && EFFORTS.indexOf(effort) < EFFORTS.indexOf('medium') ? 'medium' : effort",
     "report": "Save mode does the opposite of what it says. With it on, prompts still run at high and xhigh effort, and quick questions that used to run at low now get bumped up to medium. With save mode off everything looks normal.",
@@ -13,7 +13,7 @@
   {
     "id": "b3",
     "difficulty": "easy",
-    "file": "hooks/register.tsx",
+    "file": "hooks/usage.ts",
     "find": "if (!closed || closed.window !== hotWindow(heat)) return true",
     "replace": "if (!closed || closed.window === hotWindow(heat)) return true",
     "report": "The \"running hot\" warning won't stay closed. I close it with the cross and it comes right back in the same usage window. Then when a new usage window starts and I'm over the limit again, the warning doesn't show at all.",
@@ -25,7 +25,7 @@
   {
     "id": "b4",
     "difficulty": "medium",
-    "file": "hooks/register.tsx",
+    "file": "hooks/usage.ts",
     "find": "(Math.abs(bias) === 1 ? 0.65 : 0.85)",
     "replace": "(Math.abs(bias) === 1 ? 0.85 : 0.65)",
     "report": "The effort slider's notches feel swapped. One notch toward smarter already moves picks the judge was fairly sure about, and the outer notch moves fewer picks than the first one does. I'd expect the outer notch to tip more close calls, not fewer.",
@@ -47,7 +47,7 @@
   {
     "id": "b6",
     "difficulty": "medium",
-    "file": "hooks/register.tsx",
+    "file": "hooks/usage.ts",
     "find": "const shown = minutesLeft - 1",
     "replace": "const shown = minutesLeft",
     "report": "The cache countdown in the footer changes colour a minute late. It should turn yellow when it shows 20m and red when it shows 5m, but it is still grey at 20m and still yellow at 5m. Each colour only appears one minute later.",

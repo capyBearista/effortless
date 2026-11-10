@@ -12,11 +12,9 @@ import { forkOutcome, HANDOFF_FULL_PROMPT, HANDOFF_PROMPT, haikuCompaction, haik
 import { answersText, DECISION_QUESTIONS, DECISION_TASK, HANDOFF_SYSTEM, handoffEvidence, helperFloor, helperQuestion, isFollowUp, isUnsure, JUDGE_SYSTEM, judgeFailure, judgeQuestion, keepsEffort, namedEffort, parseDecisionAnswer, parseHandoffAnswer, parseVerdict, recentContext, sureWords, type HaikuWhy, type Judged, type Verdict, typedSkill, withAttachments, withMidTurn } from './judge'
 import { accent, onKnob, setLight, setMatchApp, setTheme, themedEls, tintHex } from './theme'
 import { PILL_H, stepsFromTodos, thinkingSvg, THINK_W, withTaskCreated, withTaskUpdated } from './progress'
+import { asSpent, kTokens, savedText, tokens, WEIGHT, weighted } from './stats'
+import { bounded, CACHE_TTL, cacheClock, cacheClockSvg, cacheColor, cacheLabel, cacheTtlOf, capped, type HotClosed, hotVisible, hotWindow, ICE, mostlyCached, resetLabel, tipped } from './usage'
 
-// What one token costs relative to an uncached input token, the same ratios on every Claude model. Measured over
-// 80k requests of real Claude Code use, cache reads are about 76% of a session's cost, cache writes 16% and output 8%: effort
-// mostly changes how many tool calls a prompt makes, not what one answer writes, so all four are counted.
-const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
 // The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
 let ACCENT = accent()
 /** Takes the theme the settings name; the accent and every drawing follow it. */
@@ -68,16 +66,7 @@ const isAuto = atom({ plugin: 'effortless', key: 'isAuto' } as const, true)
 const TYPESAFE_URL = 'https://api.typesafe.ai/v1/systemone'
 const EMPTY_SPENT: Spent = { prompts: 0, requests: 0, input: 0, write: 0, read: 0, out: 0, byEffort: {}, judge: { decision: 0, haikuUnsure: 0, haikuNoAnswer: 0, haikuOnly: 0, ms: 0, tokens: 0 } }
 const SWITCHED_MS = 2500
-// The prompt cache lives this long after the last request read or wrote it. A response may say which lifetime its
-// cache writes got (usage.cache_creation: ephemeral_1h / ephemeral_5m); until one does, 1 hour is assumed: 99% of
-// the cache writes in 80k requests of real Claude Code use (289k of 292k) were 1 hour.
-const CACHE_TTL = { '5m': 5 * 60_000, '1h': 60 * 60_000 } as const
 const CACHE_TICK_MS = 15_000
-// Under this much time left the countdown turns amber: send now, or pay to write the whole context again.
-// Shown minutes at or under these turn the countdown yellow, then red: grey while there is time, yellow at 20, red at 5.
-const CACHE_YELLOW_MIN = 20
-const CACHE_RED_MIN = 5
-const ICE = '#7cc4ff'
 const ICE_BG = '#0e1820'
 const ICE_EDGE = '#2f5c80'
 const BOG = '#a7c98f'
@@ -89,8 +78,6 @@ const EMBER_EDGE = '#6a3418'
 const SLATE = '#b4b8c4'
 const SLATE_BG = '#12141b'
 const SLATE_EDGE = '#39415a'
-const YELLOW = '#e0a33a'
-const RED = '#e5534b'
 const pick = atom({ plugin: 'effortless', key: 'pick' } as const, null)
 const isJudging = atom({ plugin: 'effortless', key: 'isJudging' } as const, false)
 const appEffort = atom({ plugin: 'effortless', key: 'appEffort' } as const, null)
@@ -722,48 +709,6 @@ async function typeCommand($: EngineInterface, text: string): Promise<boolean> {
   }
 }
 
-/**
- * The tally in its current shape. A hot reload keeps the state an older version wrote ({ requests, actual,
- * baseline } before 0.2.0), so every read goes through this.
- */
-export function asSpent(t: unknown): Spent {
-  const v = (t ?? {}) as Partial<Spent>
-  const num = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : 0)
-  const judged = (v.judge ?? {}) as Partial<Spent['judge']>
-  return {
-    prompts: num(v.prompts),
-    requests: num(v.requests),
-    input: num(v.input),
-    write: num(v.write),
-    read: num(v.read),
-    out: num(v.out),
-    byEffort: v.byEffort && typeof v.byEffort === 'object' ? v.byEffort : {},
-    judge: {
-      decision: num(judged.decision),
-      haikuUnsure: num(judged.haikuUnsure),
-      haikuNoAnswer: num(judged.haikuNoAnswer),
-      haikuOnly: num(judged.haikuOnly),
-      ms: num(judged.ms),
-      tokens: num(judged.tokens),
-    },
-    helpers: {
-      runs: v.helpers?.runs && typeof v.helpers.runs === 'object' ? v.helpers.runs : {},
-      requests: num(v.helpers?.requests),
-      cost: num(v.helpers?.cost),
-    },
-  }
-}
-
-/** A request's tokens weighted by price, in input-token terms (see WEIGHT). */
-export function weighted(usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null }): number {
-  return (
-    (usage.input_tokens ?? 0) * WEIGHT.input +
-    (usage.cache_creation_input_tokens ?? 0) * WEIGHT.write +
-    (usage.cache_read_input_tokens ?? 0) * WEIGHT.read +
-    (usage.output_tokens ?? 0) * WEIGHT.out
-  )
-}
-
 /** Adds one request Auto steered: every kind of token it used, under the effort it ran at. */
 async function tally(
   $: EngineInterface,
@@ -807,23 +752,6 @@ async function countPrompt($: EngineInterface, effort: Effort | undefined, kind:
   })
 }
 
-/** The cache lifetime a response's writes got, when it says; nothing when it wrote nothing or does not say. */
-export function cacheTtlOf(usage: unknown): keyof typeof CACHE_TTL | undefined {
-  const c = (usage as { cache_creation?: { ephemeral_1h_input_tokens?: number; ephemeral_5m_input_tokens?: number } } | null)
-    ?.cache_creation
-  if ((c?.ephemeral_1h_input_tokens ?? 0) > 0) return '1h'
-  if ((c?.ephemeral_5m_input_tokens ?? 0) > 0) return '5m'
-  return undefined
-}
-
-/** Most of the prompt came from the cache: it was still warm. */
-export function mostlyCached(usage: unknown): boolean {
-  const u = (usage ?? {}) as { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
-  const read_ = u.cache_read_input_tokens ?? 0
-  const all = read_ + (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
-  return all > 0 && read_ / all > 0.5
-}
-
 /** Save mode on or off: Auto stays at medium or below until the limit resets. The hot band's button and
  *  /effortless save. Says what it did. */
 async function toggleSave($: EngineInterface): Promise<string> {
@@ -845,46 +773,6 @@ async function coldWorth($: EngineInterface): Promise<number | null> {
   const tokens = lastContext?.tokens
   if (coldForced) return tokens ?? 0
   return tokens !== undefined && tokens >= COLD_MIN_TOKENS ? tokens : null
-}
-
-/** The countdown's colour for whole minutes left (rounded up, as cacheMinutes gives): none (grey), yellow or red. */
-export function cacheColor(minutesLeft: number): string | undefined {
-  const shown = minutesLeft - 1
-  if (minutesLeft <= 0) return ICE
-  if (shown > CACHE_YELLOW_MIN) return undefined
-  return shown <= CACHE_RED_MIN ? RED : YELLOW
-}
-
-/** The footer's words for the time left: "58m", "<1m", or "Cold". */
-export function cacheLabel(minutesLeft: number): string {
-  if (minutesLeft <= 0) return '❄ Cold'
-  if (minutesLeft === 1) return '<1m'
-  return `${minutesLeft - 1}m`
-}
-
-/** The dashboard's countdown to the second: "58:41", or "Cold" once it ran out. */
-export function cacheClock(msLeft: number): string {
-  if (msLeft <= 0) return '❄ Cold'
-  const s = Math.ceil(msLeft / 1000)
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
-
-/** How many seconds the countdown image carries: the band is redrawn once a minute, with some slack. */
-const CLOCK_FRAMES = 75
-/** The dashboard's countdown as an image that ticks by itself: one frame per second, each shown for its second by a
- * CSS animation. The band is redrawn only once a minute: every redraw rebuilds the band, which restarts every image's
- * animation (the Handoff glow restarted each second while the band was redrawn for the seconds). The app sets the
- * image's font and colour to the band's, so the digits match the text around them. */
-export function cacheClockSvg(msLeft: number, color: string): string {
-  const start = Math.max(0, Math.ceil(msLeft / 1000))
-  const frames: string[] = []
-  for (let j = 0; j < CLOCK_FRAMES && start - j > 0; j++) {
-    const left = start - j
-    const label = `cache ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`
-    frames.push(`<text x="0" y="12.5" style="animation-delay:${j}s">${label}</text>`)
-  }
-  frames.push(`<text x="0" y="12.5" style="animation-delay:${frames.length}s;animation-duration:100000s">❄ Cold</text>`)
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="84" height="17" viewBox="0 0 84 17"><style>text{font-size:13px;fill:${color};opacity:0;animation:f 1s step-end 1}@keyframes f{0%{opacity:1}100%{opacity:0}}</style>${frames.join('')}</svg>`
 }
 
 let cacheTtl: keyof typeof CACHE_TTL = '1h'
@@ -921,20 +809,6 @@ const SWAMP_REGROW = 50_000
 /** Whether the context is swamped, from the status line's figures. Cheap: no counting, no model call. */
 // A usage window this full shows the running-hot band.
 const HOT_PERCENT = 80
-// Closed, the running-hot band stays away for the rest of its window, and comes back once at this many percent.
-export const HOT_FINAL = 95
-
-/** The running-hot band closed with its cross: the window (kind and reset time) and how full it was then. */
-export type HotClosed = { window: string; percent: number }
-const hotWindow = (heat: { kind: string; resetsAt: string | null }) =>
-  // To the quarter hour: the reset time the app reports can shift by seconds between checks.
-  `${heat.kind} ${heat.resetsAt ? Math.round(new Date(heat.resetsAt).getTime() / 900_000) : ''}`
-
-/** Whether the running-hot band shows: always until closed; closed, not again in that window unless it passes HOT_FINAL. */
-export function hotVisible(heat: { kind: string; percent: number; resetsAt: string | null }, closed: HotClosed | null): boolean {
-  if (!closed || closed.window !== hotWindow(heat)) return true
-  return heat.percent >= HOT_FINAL && closed.percent < HOT_FINAL
-}
 
 let hotClosedLoaded = false
 /** The closed band as the store keeps it, read once per session (a new chat starts with the atom empty). */
@@ -965,36 +839,6 @@ async function checkHot($: EngineInterface, limits: readonly { kind: string; per
   }
   const until = await read($, saveUntil)
   if (until !== null && (await $.clock.now()) >= until) await update($, saveUntil, () => null)
-}
-
-/** "14:20" for a reset time today, "Mon 14:20" further out. */
-export function resetLabel(iso: string | null, now: number): string {
-  if (!iso) return ''
-  const at = new Date(iso)
-  const hm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
-  return at.getTime() - now < 20 * 3600_000 ? hm : `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][at.getDay()]} ${hm}`
-}
-
-/**
- * The effort slider tips close calls only: a verdict the judge was unsure of moves one step toward cheaper or smarter.
- * The outer stops count more calls as close. A sure verdict, or one without a confidence, stays as it is.
- */
-export function tipped(effort: Effort, sure: number | undefined, bias: number): Effort {
-  if (!bias || sure === undefined || sure >= (Math.abs(bias) === 1 ? 0.65 : 0.85)) return effort
-  const i = Math.max(0, Math.min(EFFORTS.length - 1, EFFORTS.indexOf(effort) + Math.sign(bias)))
-  return EFFORTS[i]
-}
-
-/** Floor and ceiling from the settings: what Auto picks stays between them. */
-export function bounded(effort: Effort, floor: Effort, ceiling: Effort): Effort {
-  const lo = EFFORTS.indexOf(floor)
-  const hi = Math.max(lo, EFFORTS.indexOf(ceiling))
-  return EFFORTS[Math.max(lo, Math.min(hi, EFFORTS.indexOf(effort)))]
-}
-
-/** Save mode caps what Auto picks at medium; a higher pick comes down to it. */
-export function capped(effort: Effort, saving: boolean): Effort {
-  return saving && EFFORTS.indexOf(effort) > EFFORTS.indexOf('medium') ? 'medium' : effort
 }
 
 // A main-conversation turn is running: set when a prompt is sent and at each request, cleared when the turn ends (an
@@ -1640,51 +1484,6 @@ async function pickJudge($: EngineInterface, choice: 'haiku' | 'decision') {
   await goSetup($, choice)
 }
 
-/** 1234 -> "1.2k", 87 -> "87". */
-function tokens(n: number): string {
-  const v = Math.abs(n)
-  const text = v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v)
-  return n < 0 ? `-${text}` : text
-}
-
-const share = (part: number, whole: number) => `${Math.round((part / whole) * 100)} %`
-
-/**
- * What /effortless stats answers: what the prompts Auto steered cost, measured, split by kind and by effort,
- * and what the judge took. No "saved" figure: what a prompt would have cost at another effort is not known,
- * since effort mostly changes how many tool calls it makes. Cost is in tokens weighted as priced (WEIGHT).
- */
-export function savedText(raw: Spent): string {
-  const t = asSpent(raw)
-  const judged = t.judge.decision + t.judge.haikuUnsure + t.judge.haikuNoAnswer + t.judge.haikuOnly
-  const helperRuns = EFFORTS.reduce((n, e) => n + (t.helpers.runs[e] ?? 0), 0)
-  if (t.prompts === 0 && judged === 0 && helperRuns === 0) return 'nothing measured yet'
-  const input = t.input * WEIGHT.input
-  const write = t.write * WEIGHT.write
-  const cached = t.read * WEIGHT.read
-  const out = t.out * WEIGHT.out
-  const total = input + write + cached + out
-  const lines = [
-    `${t.prompts} prompts, ${t.requests} requests, cost about ${tokens(Math.round(total))} tokens weighted by price` +
-      (total > 0 ? ` (cache reads ${share(cached, total)}, cache writes ${share(write, total)}, output ${share(out, total)})` : ''),
-  ]
-  const per = EFFORTS.filter(e => t.byEffort[e]?.prompts).map(e => {
-    const b = t.byEffort[e]!
-    return `${EFFORT_LABELS[e]} ${b.prompts}, average ${tokens(Math.round(b.cost / b.prompts))}`
-  })
-  if (per.length) lines.push(`Per prompt: ${per.join('; ')}`)
-  if (helperRuns) {
-    const per = EFFORTS.filter(e => t.helpers.runs[e]).map(e => `${EFFORT_LABELS[e]} ${t.helpers.runs[e]}`)
-    lines.push(`Helpers: ${helperRuns} subagent${helperRuns === 1 ? '' : 's'} (${per.join(', ')}), ${t.helpers.requests} requests, cost about ${tokens(Math.round(t.helpers.cost))} tokens`)
-  }
-  if (judged) {
-    lines.push(
-      `Judge: decision models ${t.judge.decision}, Haiku after unsure ${t.judge.haikuUnsure}, after no answer ${t.judge.haikuNoAnswer}, Haiku only ${t.judge.haikuOnly}, average ${Math.round(t.judge.ms / judged)} ms, ${tokens(t.judge.tokens)} tokens in all`,
-    )
-  }
-  return lines.join('\n')
-}
-
 /** You picked an effort (terminal rows): Auto for effort goes off and the requests follow; Enter on /effort moves the app. */
 async function pickEffort($: EngineInterface, level: Effort) {
   const t0 = Date.now()
@@ -1786,11 +1585,6 @@ export function rowIconSvg(kind: 'effort' | 'judge' | 'handoff' | 'show' | 'quic
  * when the image is first drawn and is not restarted by a redraw with the same source. Stretched to the band
  * (preserveAspectRatio none: the app scales a Svg down to its box's width but keeps its height), behind the content. */
 export const INTRO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="240" viewBox="0 0 1600 240" preserveAspectRatio="none"><style>.w{opacity:0;animation:w .7s ease-out}.s{opacity:0;animation:s 1.1s cubic-bezier(.2,.7,.2,1)}@keyframes w{from{opacity:.16}to{opacity:0}}@keyframes s{from{transform:translateX(-520px);opacity:1}80%{opacity:1}to{transform:translateX(1700px);opacity:0}}</style><defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".55" stop-color="#b9a7ff" stop-opacity=".16"/><stop offset=".7" stop-color="#fff" stop-opacity=".1"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs><rect class="w" width="1600" height="240" fill="#8b6cff"/><rect class="s" width="480" height="240" fill="url(#g)"/></svg>`
-
-/** k/M for token counts: 420000 -> "420k", 1000000 -> "1.0M". */
-function kTokens(n: number): string {
-  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}k`
-}
 
 async function snap($: EngineInterface) {
   const [auto, current, judging, shownByApp, modelNow, switchedNow, pausedNow, cacheNow, compacting] = await Promise.all([
