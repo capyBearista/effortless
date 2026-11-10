@@ -1,107 +1,28 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelForkResult, Register, RenderInput } from 'claude-code'
 
-import type { AgentRec, Answers, Effort, HandoffAfter, HandoffChoice, JudgedModel, ModelAnswer, ModelKey, Pick, SettingsDraft, Spent } from '../types'
+import type { AgentRec, Effort, HandoffAfter, HandoffChoice, JudgedModel, ModelAnswer, ModelKey, Pick, SettingsDraft, Spent } from '../types'
 import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolLine, touchOf, withTouch, withWaits } from './agents'
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
+import { cacheSafe, config, EFFORT_LABELS, EFFORTS, HAIKU_MODEL, type Hideable, type JudgeConfig, MODELS, readConfig, setConfig, SWAMP_STEPS, timingWarnings } from './config'
 import { chainIds, DECISION_PRESETS, type DecisionRoute, hopTimeout, MAX_ROUTES, movedEarlier, OPENROUTER_APP_HEADERS, OPENROUTER_URL, parseDecisionModels, routeLabel, routeName, routeShortName, withoutRoute, withRoute, ZEN_URL } from './decisions'
-import { accent, onKnob, setLight, setMatchApp, setTheme, themedEls, type ThemeName, THEMES, tintHex } from './theme'
+import { type EnvAsk, envHome, envOpenRouterKey, envTypesafeKey, envTypesafeUrl, envUserProfile, loadedSession, parseEnvLine, parseTypesafeKey, proof, renderLog, setLoadedSession, typedTypesafeKey, withEnvLine, withTypesafeKey, writeRenderLog } from './env'
+import { forkOutcome, HANDOFF_FULL_PROMPT, HANDOFF_PROMPT, haikuCompaction, haikuHandoff, handoffArgs, handoffMessage, handoffWhat, withFocus } from './handoff'
+import { answersText, DECISION_QUESTIONS, DECISION_TASK, HANDOFF_SYSTEM, handoffEvidence, helperFloor, helperQuestion, isFollowUp, isUnsure, JUDGE_SYSTEM, judgeFailure, judgeQuestion, keepsEffort, namedEffort, parseDecisionAnswer, parseHandoffAnswer, parseVerdict, recentContext, sureWords, type HaikuWhy, type Judged, type Verdict, typedSkill, withAttachments, withMidTurn } from './judge'
+import { onKnob, themedEls } from './theme'
 import { PILL_H, stepsFromTodos, thinkingSvg, THINK_W, withTaskCreated, withTaskUpdated } from './progress'
-
-// The ladders the two sliders walk, cheapest first.
-export const MODELS: { key: ModelKey; label: string; long: string; id: string }[] = [
-  { key: 'haiku', label: 'Haiku', long: 'Haiku 5.5', id: 'claude-haiku-5-5' },
-  { key: 'sonnet', label: 'Sonnet', long: 'Sonnet 5.5', id: 'claude-sonnet-5-5' },
-  { key: 'opus', label: 'Opus', long: 'Opus 5.5', id: 'claude-opus-5-5' },
-  { key: 'fable', label: 'Fable', long: 'Fable 5.1', id: 'claude-fable-5-1' },
-]
-export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
-// What one token costs relative to an uncached input token, the same ratios on every Claude model. Measured over
-// 80k requests of real Claude Code use, cache reads are about 76% of a session's cost, cache writes 16% and output 8%: effort
-// mostly changes how many tool calls a prompt makes, not what one answer writes, so all four are counted.
-const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
-// shortcut: every Claude family is taken to keep the prompt cache when effort changes, as Opus/Sonnet/Haiku 5.5 and Fable 5.1+
-// do per Claude Code's docs; older models (which rewrote it) and no-cache setups are not detected (README, Models).
-export const cacheSafe = (modelId: string) => /opus|sonnet|haiku|fable/.test(modelId)
-// The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
-let ACCENT = accent()
-/** Takes the theme the settings name; the accent and every drawing follow it. */
-function applyTheme() {
-  setTheme(config.theme)
-  ACCENT = accent()
-  BRAND_BG = tintHex('#15121f')
-  BRAND_EDGE = tintHex('#4a3f80')
-  BRAND_HEAD = tintHex('#221c3a')
-  FLASH_COLOR = tintHex('#9b7bff')
-  // The panel greys lean blue beside the violet; with Claude orange they are the app's own neutral greys.
-  const neutral = config.theme !== 'violet'
-  DASH_BG = neutral ? '#151515' : '#141416'
-  DASH_EDGE = neutral ? '#2a2a2a' : '#2a2a2f'
-  DASH_HEAD = neutral ? '#191919' : '#18181b'
-  CARD_HOVER = neutral ? '#1c1c1c' : '#1c1c20'
-  CARD_HOVER_EDGE = neutral ? '#3b3b3b' : '#3b3b42'
-  HOVER_BOX = neutral ? '#2b2b2b' : '#2b2b2f'
-  applyAppearance()
-}
-
-// Claude Code's own theme, read from its /config row: a light one turns everything light when appearance is auto.
-let claudeIsLight = false
-let appearanceCheckedAt = -Infinity
-function applyAppearance() {
-  setLight(config.appearance === 'light' || (config.appearance === 'auto' && claudeIsLight))
-  // Where the band draws images the app's own light or dark is followed instead (theme.ts, setMatchApp).
-  setMatchApp(config.appearance === 'auto')
-}
-/** Reads Claude Code's theme row (at most every few seconds) and redraws when light or dark changed. */
-async function refreshAppearance($: EngineInterface) {
-  const now = await $.clock.now().catch(() => Date.now())
-  if (now - appearanceCheckedAt < 4000) return
-  appearanceCheckedAt = now
-  const rows = await $.config.list().catch(() => [])
-  const value = rows.find(row => row.key === 'theme')?.value
-  const lightNow = typeof value === 'string' && value.startsWith('light')
-  if (lightNow === claudeIsLight) return
-  claudeIsLight = lightNow
-  applyAppearance()
-  $.ui.invalidate('ui.render')
-}
-let BRAND_BG = '#15121f'
-let BRAND_EDGE = '#4a3f80'
-// The settings panel's header bar: a shade lighter than the panel, so it reads as a title bar.
-let BRAND_HEAD = '#221c3a'
-// The box behind the level while it is hovered: the grey of the app's own pills.
-let HOVER_BOX = '#2b2b2f'
-const EFFORT_LABELS: Record<Effort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
+import { homeDir, LEAN_STOPS, noClaudeHint, RELOAD_ARGS, runClaude, setupBack, setupCounter, setupNext, setupShown, type SetupStep, TYPESAFE_ROUTE, withTypesafeRoute } from './setup'
+import { asSpent, kTokens, savedText, tokens, WEIGHT, weighted } from './stats'
+import { ACCENT, applyTheme, AUTO_GLOW_H, AUTO_GLOW_MS, AUTO_GLOW_W, autoGlowSvg, autoSwitchSvg, binSvg, BOG, BOG_BG, BOG_EDGE, BRAND_BG, BRAND_EDGE, BRAND_SVG, CARD_HOVER, CARD_HOVER_EDGE, CLAUDE_MARK, COLD_GLOW_MS, coldGlowSvg, COMPACT_FADE_MS, compactFadeSvg, DASH_BG, DASH_DIM, DASH_EDGE, DASH_HEAD, DASH_MARK_OFF, DASH_MARK_SIZE, DASH_SVG, DASH_TEXT, dashboardLines, DONE_ACCENT, DONE_BG, DONE_EDGE, DONE_MARK_SVG, DONE_SVG, DOWN_SVG, EMBER, EMBER_BG, EMBER_EDGE, EMBER_SVG, enterSvg, FLASH_MS, FLASH_STEPS, flashColor, FROST_HEIGHT, FROST_SVG, FROST_WIDTH, GLOW_H, GLOW_W, GO_CELLS, GO_W, goPillSvg, HANDOFF_BOX_AT, HANDOFF_PILL_H, HANDOFF_PILL_W, HANDOFF_SVG, handoffGlowStep, handoffGlowSvg, handoffLook, handoffPillSvg, HOVER_BOX, ICE_BG, ICE_EDGE, inPhase, INTRO_SVG, JUDGE_FADE_MS, JUDGE_RISE_MS, JUDGE_STEP_MS, judgeGlowAt, OPENCODE_MARK, OPENROUTER_MARK, providerMark, refreshAppearance, ringSvg, rowIconSvg, SETTINGS_MARK, SETTINGS_TITLE, settingsSvg, SLATE, SLATE_BG, SLATE_EDGE, SWAMP_SVG, TYPESAFE_MARK } from './svgs'
+import { bounded, CACHE_TTL, cacheClock, cacheClockSvg, cacheColor, cacheLabel, cacheTtlOf, capped, type HotClosed, hotVisible, hotWindow, ICE, mostlyCached, resetLabel, tipped } from './usage'
 
 // Auto: whether the judge picks the effort.
 const isAuto = atom({ plugin: 'effortless', key: 'isAuto' } as const, true)
 const TYPESAFE_URL = 'https://api.typesafe.ai/v1/systemone'
 const EMPTY_SPENT: Spent = { prompts: 0, requests: 0, input: 0, write: 0, read: 0, out: 0, byEffort: {}, judge: { decision: 0, haikuUnsure: 0, haikuNoAnswer: 0, haikuOnly: 0, ms: 0, tokens: 0 } }
 const SWITCHED_MS = 2500
-// The prompt cache lives this long after the last request read or wrote it. A response may say which lifetime its
-// cache writes got (usage.cache_creation: ephemeral_1h / ephemeral_5m); until one does, 1 hour is assumed: 99% of
-// the cache writes in 80k requests of real Claude Code use (289k of 292k) were 1 hour.
-const CACHE_TTL = { '5m': 5 * 60_000, '1h': 60 * 60_000 } as const
 const CACHE_TICK_MS = 15_000
-// Under this much time left the countdown turns amber: send now, or pay to write the whole context again.
-// Shown minutes at or under these turn the countdown yellow, then red: grey while there is time, yellow at 20, red at 5.
-const CACHE_YELLOW_MIN = 20
-const CACHE_RED_MIN = 5
-const ICE = '#7cc4ff'
-const ICE_BG = '#0e1820'
-const ICE_EDGE = '#2f5c80'
-const BOG = '#a7c98f'
-const BOG_BG = '#111710'
-const BOG_EDGE = '#3e5a33'
-const EMBER = '#f08a3c'
-const EMBER_BG = '#1a110c'
-const EMBER_EDGE = '#6a3418'
-const SLATE = '#b4b8c4'
-const SLATE_BG = '#12141b'
-const SLATE_EDGE = '#39415a'
-const YELLOW = '#e0a33a'
-const RED = '#e5534b'
 const pick = atom({ plugin: 'effortless', key: 'pick' } as const, null)
 const isJudging = atom({ plugin: 'effortless', key: 'isJudging' } as const, false)
 const appEffort = atom({ plugin: 'effortless', key: 'appEffort' } as const, null)
@@ -123,13 +44,6 @@ const compactAsk = atom({ plugin: 'effortless', key: 'compactAsk' } as const, fa
 let compactNote = ''
 // When the compact bar opened: its first half second fades the swamped band's colours out (see compactFadeSvg).
 let compactOpenedAt = 0
-const COMPACT_FADE_MS = 450
-/** The swamped band's colours over the compact bar, fading to nothing: the band seems to turn from green to violet. */
-function compactFadeSvg(elapsedMs: number): string {
-  return inPhase(`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="240" viewBox="0 0 1600 240" preserveAspectRatio="none"><style>.f{animation:f ${COMPACT_FADE_MS / 1000}s ease-out forwards}@keyframes f{from{opacity:1}to{opacity:0}}</style><rect class="f" width="1600" height="240" fill="${BOG_BG}"/></svg>`, elapsedMs)
-}
-// The person closed the cold band; it comes back the next time the cache goes cold.
-// The test pane of /effortless try pane.
 // Where a handoff is: null idle, writing (the handoff turn runs), clearing (clear and resend).
 const handoffStage = atom({ plugin: 'effortless', key: 'handoffStage' } as const, null)
 // The handoff bar above the prompt, open with the choice shown in it, or null.
@@ -148,8 +62,6 @@ const cardRunning = (kind: HandoffCard['kind']) => kind === 'writing' || kind ==
 const cardLanded = (kind: HandoffCard['kind']) => kind === 'done' || kind === 'compacted'
 const handoffCard = atom({ plugin: 'effortless', key: 'handoffCard' } as const, null)
 const HANDOFF_CARD_MS = 2 * 60_000
-// The handoff card's art while it is written: sparkles carried from left to right.
-const HANDOFF_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="440" height="64" viewBox="0 0 360 30" preserveAspectRatio="xMaxYMid slice"><style>:root{color-scheme:light dark}html,body{margin:0}svg{background:transparent;display:block}.d{fill:#d9d1ff;opacity:0;animation-name:go;animation-timing-function:ease-in-out;animation-iteration-count:infinite}@keyframes go{0%{opacity:0;transform:translate(0,0)}15%{opacity:.9}85%{opacity:.7}100%{opacity:0;transform:translate(190px,0)}}.br{animation:br 2.4s ease-in-out infinite}@keyframes br{0%,100%{opacity:.75}50%{opacity:1}}</style><defs><linearGradient id="bg" x1="0" x2="1"><stop offset=".43" stop-color="#7c6cf0" stop-opacity="0"/><stop offset=".7" stop-color="#7c6cf0" stop-opacity=".2"/><stop offset="1" stop-color="#b3a6ff" stop-opacity=".46"/></linearGradient><linearGradient id="fade" x1="0" x2="1"><stop offset=".43" stop-color="#fff" stop-opacity="0"/><stop offset=".7" stop-color="#fff" stop-opacity="1"/></linearGradient><mask id="m"><rect width="360" height="30" fill="url(#fade)"/></mask><pattern id="grain" width="2" height="2" patternUnits="userSpaceOnUse"><rect width=".6" height=".6" fill="#fff" fill-opacity=".07"/></pattern></defs><g mask="url(#m)"><rect class="br" width="360" height="30" fill="url(#bg)"/><circle class="d" cx="170" cy="9.2" r="0.83" style="animation-duration:2.7s;animation-delay:-2.2s"/><circle class="d" cx="170" cy="17.8" r="0.54" style="animation-duration:2.2s;animation-delay:-3.0s"/><circle class="d" cx="170" cy="9.7" r="0.64" style="animation-duration:3.6s;animation-delay:-1.7s"/><circle class="d" cx="170" cy="22.4" r="0.79" style="animation-duration:3.1s;animation-delay:-0.5s"/><circle class="d" cx="170" cy="18.0" r="1.02" style="animation-duration:2.9s;animation-delay:-2.7s"/><circle class="d" cx="170" cy="18.8" r="0.54" style="animation-duration:3.3s;animation-delay:-2.1s"/><circle class="d" cx="170" cy="10.6" r="0.52" style="animation-duration:3.4s;animation-delay:-1.7s"/><circle class="d" cx="170" cy="19.8" r="1.03" style="animation-duration:3.2s;animation-delay:-3.3s"/><circle class="d" cx="170" cy="12.7" r="0.98" style="animation-duration:2.8s;animation-delay:-3.4s"/><circle class="d" cx="170" cy="23.3" r="0.56" style="animation-duration:2.4s;animation-delay:-0.8s"/><circle class="d" cx="170" cy="25.2" r="0.76" style="animation-duration:3.1s;animation-delay:-1.1s"/><circle class="d" cx="170" cy="15.2" r="0.73" style="animation-duration:2.7s;animation-delay:-2.1s"/><circle class="d" cx="170" cy="16.9" r="1.04" style="animation-duration:3.2s;animation-delay:-3.3s"/><circle class="d" cx="170" cy="22.8" r="1.09" style="animation-duration:3.1s;animation-delay:-0.6s"/><rect width="360" height="30" fill="url(#grain)"/></g></svg>`
 
 async function setHandoffCard($: EngineInterface, kind: HandoffCard['kind'], full: boolean, seen = false) {
   const at = await $.clock.now()
@@ -218,66 +130,12 @@ const setupStep = atom({ plugin: 'effortless', key: 'setupStep' } as const, null
 // What was picked in the setup guide and not saved yet: it is saved in one go at Done or ✕. Each saved setting reloads
 // the plugin, and the app says so in the chat, so a save per click filled the chat with notices.
 const setupDraft = atom({ plugin: 'effortless', key: 'setupDraft' } as const, {})
-
-// The band above the prompt when the cache has gone cold: an icy gradient with snowflakes drifting down.
-const FROST_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="440" height="64" viewBox="0 0 360 30" preserveAspectRatio="xMaxYMid slice"><style>:root{color-scheme:light dark}html,body{margin:0}svg{background:transparent;display:block}.f path{stroke:#eaf6ff;stroke-width:.5;stroke-linecap:round;fill:none}.f{transform-box:fill-box;transform-origin:center;animation:spin linear infinite;opacity:.75}@keyframes spin{to{transform:rotate(360deg)}}.fr{stroke:#dff1ff;stroke-width:.4;fill:none;stroke-linecap:round;opacity:.5}.gl{fill:#fff;opacity:0;animation:tw 3.6s ease-in-out infinite}@keyframes tw{0%,70%,100%{opacity:0}80%{opacity:.9}}.br{animation:br 6s ease-in-out infinite}@keyframes br{0%,100%{opacity:.85}50%{opacity:1}}</style><defs><linearGradient id="ice" x1="0" x2="1"><stop offset=".43" stop-color="#5aa9e6" stop-opacity="0"/><stop offset=".62" stop-color="#5aa9e6" stop-opacity=".12"/><stop offset=".85" stop-color="#8fd0ff" stop-opacity=".28"/><stop offset="1" stop-color="#cdeaff" stop-opacity=".42"/></linearGradient><radialGradient id="cold" cx="330" cy="15" r="60" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#e9f6ff" stop-opacity=".22"/><stop offset="1" stop-color="#e9f6ff" stop-opacity="0"/></radialGradient><linearGradient id="rime" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".18"/><stop offset=".22" stop-color="#fff" stop-opacity="0"/><stop offset=".78" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity=".15"/></linearGradient><linearGradient id="fade" x1="0" x2="1"><stop offset=".43" stop-color="#fff" stop-opacity="0"/><stop offset=".7" stop-color="#fff" stop-opacity="1"/></linearGradient><mask id="m"><rect width="360" height="30" fill="url(#fade)"/></mask><pattern id="grain" width="2" height="2" patternUnits="userSpaceOnUse"><rect width=".6" height=".6" fill="#fff" fill-opacity=".07"/></pattern></defs><g mask="url(#m)"><rect class="br" width="360" height="30" fill="url(#ice)"/><rect width="360" height="30" fill="url(#cold)"/><rect width="360" height="30" fill="url(#rime)"/><rect width="360" height="30" fill="url(#grain)"/><path class="fr" d="M360.0 3.0L354.1 2.1M354.1 2.1L349.8 1.8M349.8 1.8L346.7 2.1M346.7 2.1L344.4 2.2M348.2 1.9L347.5 3.2M351.9 1.9L350.3 3.1M350.3 3.1L349.2 3.8M357.0 2.5L355.1 0.6M355.1 0.6L353.5 -0.5M353.5 -0.5L352.4 -1.4M356.1 1.6L354.9 1.4M360.0 27.0L354.1 27.9M354.1 27.9L349.8 28.5M349.8 28.5L346.9 29.6M346.9 29.6L345.0 30.8M348.3 29.0L347.1 28.4M351.9 28.2L350.9 29.9M350.9 29.9L350.3 31.1M357.0 27.5L355.2 29.4M355.2 29.4L353.9 30.9M353.9 30.9L352.8 31.8M356.1 28.4L354.9 28.5M350.0 30.0L348.8 26.2M348.8 26.2L347.9 23.4M347.9 23.4L347.6 21.4M347.6 21.4L347.7 19.9M348.4 24.8L348.9 23.6M349.4 28.1L350.2 26.5M350.2 26.5L350.8 25.3M352.0 0.0L351.0 3.9M351.0 3.9L350.4 6.7M350.4 6.7L349.6 8.6M349.6 8.6L349.0 10.0M350.7 5.3L349.6 5.9M351.5 1.9L352.2 3.6M352.2 3.6L352.9 4.7"/><circle class="gl" cx="228" cy="26" r="0.5" style="animation-delay:0s"/><circle class="gl" cx="205" cy="4" r="0.45" style="animation-delay:1.3s"/><circle class="gl" cx="186" cy="26" r="0.4" style="animation-delay:2.4s"/><circle class="gl" cx="262" cy="6" r="0.5" style="animation-delay:0.7s"/><circle class="gl" cx="300" cy="25" r="0.45" style="animation-delay:3.1s"/><circle class="gl" cx="330" cy="6" r="0.5" style="animation-delay:1.9s"/><g class="f" style="animation-duration:10s;animation-delay:0s"><path d="M236.0 9.0L236.0 13.2M236.0 10.9L237.0 11.8M236.0 10.9L235.0 11.8M236.0 11.9L236.7 12.6M236.0 11.9L235.3 12.6M236.0 9.0L232.4 11.1M234.4 9.9L234.0 11.2M234.4 9.9L233.1 9.6M233.5 10.5L233.2 11.4M233.5 10.5L232.6 10.2M236.0 9.0L232.4 6.9M234.4 8.1L233.1 8.4M234.4 8.1L234.0 6.8M233.5 7.5L232.6 7.8M233.5 7.5L233.2 6.6M236.0 9.0L236.0 4.8M236.0 7.1L235.0 6.2M236.0 7.1L237.0 6.2M236.0 6.1L235.3 5.4M236.0 6.1L236.7 5.4M236.0 9.0L239.6 6.9M237.6 8.1L238.0 6.8M237.6 8.1L238.9 8.4M238.5 7.5L238.8 6.6M238.5 7.5L239.4 7.8M236.0 9.0L239.6 11.1M237.6 9.9L238.9 9.6M237.6 9.9L238.0 11.2M238.5 10.5L239.4 10.2M238.5 10.5L238.8 11.4"/></g><g class="f" style="animation-duration:12s;animation-delay:-4s"><path d="M214.0 21.0L214.0 24.2M214.0 22.4L214.7 23.2M214.0 22.4L213.3 23.2M214.0 23.2L214.5 23.7M214.0 23.2L213.5 23.7M214.0 21.0L211.2 22.6M212.8 21.7L212.5 22.7M212.8 21.7L211.8 21.5M212.1 22.1L211.9 22.8M212.1 22.1L211.4 21.9M214.0 21.0L211.2 19.4M212.8 20.3L211.8 20.5M212.8 20.3L212.5 19.3M212.1 19.9L211.4 20.1M212.1 19.9L211.9 19.2M214.0 21.0L214.0 17.8M214.0 19.6L213.3 18.8M214.0 19.6L214.7 18.8M214.0 18.8L213.5 18.3M214.0 18.8L214.5 18.3M214.0 21.0L216.8 19.4M215.2 20.3L215.5 19.3M215.2 20.3L216.2 20.5M215.9 19.9L216.1 19.2M215.9 19.9L216.6 20.1M214.0 21.0L216.8 22.6M215.2 21.7L216.2 21.5M215.2 21.7L215.5 22.7M215.9 22.1L216.6 21.9M215.9 22.1L216.1 22.8"/></g><g class="f" style="animation-duration:11s;animation-delay:-7s"><path d="M194.0 8.0L194.0 10.6M194.0 9.2L194.6 9.8M194.0 9.2L193.4 9.8M194.0 9.8L194.4 10.2M194.0 9.8L193.6 10.2M194.0 8.0L191.7 9.3M193.0 8.6L192.8 9.4M193.0 8.6L192.2 8.4M192.4 8.9L192.3 9.5M192.4 8.9L191.9 8.8M194.0 8.0L191.7 6.7M193.0 7.4L192.2 7.6M193.0 7.4L192.8 6.6M192.4 7.1L191.9 7.2M192.4 7.1L192.3 6.5M194.0 8.0L194.0 5.4M194.0 6.8L193.4 6.2M194.0 6.8L194.6 6.2M194.0 6.2L193.6 5.8M194.0 6.2L194.4 5.8M194.0 8.0L196.3 6.7M195.0 7.4L195.2 6.6M195.0 7.4L195.8 7.6M195.6 7.1L195.7 6.5M195.6 7.1L196.1 7.2M194.0 8.0L196.3 9.3M195.0 8.6L195.8 8.4M195.0 8.6L195.2 9.4M195.6 8.9L196.1 8.8M195.6 8.9L195.7 9.5"/></g><g class="f" style="animation-duration:13s;animation-delay:-2s"><path d="M176.0 19.0L176.0 21.2M176.0 20.0L176.5 20.5M176.0 20.0L175.5 20.5M176.0 20.5L176.3 20.9M176.0 20.5L175.7 20.9M176.0 19.0L174.1 20.1M175.1 19.5L175.0 20.2M175.1 19.5L174.5 19.3M174.7 19.8L174.5 20.2M174.7 19.8L174.2 19.6M176.0 19.0L174.1 17.9M175.1 18.5L174.5 18.7M175.1 18.5L175.0 17.8M174.7 18.2L174.2 18.4M174.7 18.2L174.5 17.8M176.0 19.0L176.0 16.8M176.0 18.0L175.5 17.5M176.0 18.0L176.5 17.5M176.0 17.5L175.7 17.1M176.0 17.5L176.3 17.1M176.0 19.0L177.9 17.9M176.9 18.5L177.0 17.8M176.9 18.5L177.5 18.7M177.3 18.2L177.5 17.8M177.3 18.2L177.8 18.4M176.0 19.0L177.9 20.1M176.9 19.5L177.5 19.3M176.9 19.5L177.0 20.2M177.3 19.8L177.8 19.6M177.3 19.8L177.5 20.2"/></g><g class="f" style="animation-duration:14s;animation-delay:-9s"><path d="M252.0 22.0L252.0 24.4M252.0 23.1L252.5 23.6M252.0 23.1L251.5 23.6M252.0 23.7L252.4 24.1M252.0 23.7L251.6 24.1M252.0 22.0L249.9 23.2M251.1 22.5L250.9 23.3M251.1 22.5L250.3 22.3M250.5 22.8L250.4 23.4M250.5 22.8L250.0 22.7M252.0 22.0L249.9 20.8M251.1 21.5L250.3 21.7M251.1 21.5L250.9 20.7M250.5 21.2L250.0 21.3M250.5 21.2L250.4 20.6M252.0 22.0L252.0 19.6M252.0 20.9L251.5 20.4M252.0 20.9L252.5 20.4M252.0 20.3L251.6 19.9M252.0 20.3L252.4 19.9M252.0 22.0L254.1 20.8M252.9 21.5L253.1 20.7M252.9 21.5L253.7 21.7M253.5 21.2L253.6 20.6M253.5 21.2L254.0 21.3M252.0 22.0L254.1 23.2M252.9 22.5L253.7 22.3M252.9 22.5L253.1 23.3M253.5 22.8L254.0 22.7M253.5 22.8L253.6 23.4"/></g></g></svg>`
-// The frost is drawn larger than the band and cut by it: wide enough for the right side, tall enough for any band.
-const FROST_WIDTH = 440
-const FROST_HEIGHT = 64
-// TypeSafe's mark (from typesafe.ai), drawn beside the decision model button: a Button holds text only.
-const TYPESAFE_MARK = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="18" viewBox="0 0 16.487 24"><style>svg{background:transparent;display:block}</style><path d="M 12.756 2.928 L 12.756 7.067 L 16.486 9.487 L 16.487 18.652 L 8.244 24 L 3.732 21.073 L 3.732 16.82 L 0 14.399 L 0 5.35 L 0.355 5.118 L 8.244 0 Z M 5.94 20.65 L 8.242 22.144 L 14.275 18.227 L 11.975 16.735 Z M 9.022 10.332 L 9.022 14.4 L 5.29 16.822 L 5.29 19.216 L 11.197 15.383 L 11.197 8.921 Z M 12.756 15.384 L 14.928 16.794 L 14.928 10.332 L 12.756 8.922 Z M 2.21 13.976 L 4.511 15.47 L 6.812 13.976 L 4.512 12.485 Z M 1.559 6.193 L 1.559 12.544 L 3.731 11.134 L 3.731 7.066 L 7.464 4.643 L 7.464 2.36 L 1.56 6.193 Z M 5.291 11.132 L 7.463 12.542 L 7.463 10.332 L 5.292 8.921 L 5.292 11.132 Z M 5.94 7.487 L 8.244 8.981 L 10.544 7.488 L 8.244 5.994 Z M 9.024 4.643 L 11.196 6.054 L 11.196 3.774 L 9.024 2.359 Z" fill="#ffffff"/></svg>`
-// Fork: OpenCode's mark (opencode.ai/favicon.svg, its frame and inner block) in white, cropped to the frame, beside Zen.
-const OPENCODE_MARK = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="16" viewBox="128 96 256 320"><style>svg{background:transparent;display:block}</style><path d="M320 224V352H192V224H320Z" fill="#ffffff" opacity=".4"/><path fill-rule="evenodd" clip-rule="evenodd" d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z" fill="#ffffff"/></svg>`
-// Fork: OpenRouter's glyph (openrouter.ai/brand/v2/openrouter-glyph-light.svg) in white, beside OpenRouter.
-const OPENROUTER_MARK = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="12" viewBox="0 0 401.4 293.7"><style>svg{background:transparent;display:block}</style><path d="M303.9475,17.19926c42.79734,0,77.48933,34.69327,77.48933,77.48933s-34.69199,77.48933-77.48933,77.48933l76.86166,76.86244c9.76367,9.76313,2.84903,26.45667-10.95697,26.45667h-220.88335c-71.32686,0-129.14889-57.82202-129.14889-129.14889S77.64197,17.19926,148.96884,17.19926h154.97866ZM148.96884,68.85881c-42.79607,0-77.48933,34.69327-77.48933,77.48933s34.69327,77.48933,77.48933,77.48933,77.48933-34.69327,77.48933-77.48933-34.69327-77.48933-77.48933-77.48933Z" fill="#ffffff"/></svg>`
-// Claude's mark (from claude.ai) in white, drawn beside the Haiku button.
-const CLAUDE_MARK = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 248 248"><style>svg{background:transparent;display:block}</style><path d="M52.4285 162.873L98.7844 136.879L99.5485 134.602L98.7844 133.334H96.4921L88.7237 132.862L62.2346 132.153L39.3113 131.207L17.0249 130.026L11.4214 128.844L6.2 121.873L6.7094 118.447L11.4214 115.257L18.171 115.847L33.0711 116.911L55.485 118.447L71.6586 119.392L95.728 121.873H99.5485L100.058 120.337L98.7844 119.392L97.7656 118.447L74.5877 102.732L49.4995 86.1905L36.3823 76.62L29.3779 71.7757L25.8121 67.2858L24.2839 57.3608L30.6515 50.2716L39.3113 50.8623L41.4763 51.4531L50.2636 58.1879L68.9842 72.7209L93.4357 90.6804L97.0015 93.6343L98.4374 92.6652L98.6571 91.9801L97.0015 89.2625L83.757 65.2772L69.621 40.8192L63.2534 30.6579L61.5978 24.632C60.9565 22.1032 60.579 20.0111 60.579 17.4246L67.8381 7.49965L71.9133 6.19995L81.7193 7.49965L85.7946 11.0443L91.9074 24.9865L101.714 46.8451L116.996 76.62L121.453 85.4816L123.873 93.6343L124.764 96.1155H126.292V94.6976L127.566 77.9197L129.858 57.3608L132.15 30.8942L132.915 23.4505L136.608 14.4708L143.994 9.62643L149.725 12.344L154.437 19.0788L153.8 23.4505L150.998 41.6463L145.522 70.1215L141.957 89.2625H143.994L146.414 86.7813L156.093 74.0206L172.266 53.698L179.398 45.6635L187.803 36.802L193.152 32.5484H203.34L210.726 43.6549L207.415 55.1159L196.972 68.3492L188.312 79.5739L175.896 96.2095L168.191 109.585L168.882 110.689L170.738 110.53L198.755 104.504L213.91 101.787L231.994 98.7149L240.144 102.496L241.036 106.395L237.852 114.311L218.495 119.037L195.826 123.645L162.07 131.592L161.696 131.893L162.137 132.547L177.36 133.925L183.855 134.279H199.774L229.447 136.524L237.215 141.605L241.8 147.867L241.036 152.711L229.065 158.737L213.019 154.956L175.45 145.977L162.587 142.787H160.805V143.85L171.502 154.366L191.242 172.089L215.82 195.011L217.094 200.682L213.91 205.172L210.599 204.699L188.949 188.394L180.544 181.069L161.696 165.118H160.422V166.772L164.752 173.152L187.803 207.771L188.949 218.405L187.294 221.832L181.308 223.959L174.813 222.777L161.187 203.754L147.305 182.486L136.098 163.345L134.745 164.2L128.075 235.42L125.019 239.082L117.887 241.8L111.902 237.31L108.718 229.984L111.902 215.452L115.722 196.547L118.779 181.541L121.58 162.873L123.291 156.636L123.14 156.219L121.773 156.449L107.699 175.752L86.304 204.699L69.3663 222.777L65.291 224.431L58.2867 220.768L58.9235 214.27L62.8713 208.48L86.304 178.705L100.44 160.155L109.551 149.507L109.462 147.967L108.959 147.924L46.6977 188.512L35.6182 189.93L30.7788 185.44L31.4156 178.115L33.7079 175.752L52.4285 162.873Z" fill="#ffffff"/></svg>`
-/** Fork: the mark drawn beside a decision model: its provider's. Each with its own size, as drawn. */
-const providerMark = (route: DecisionRoute) =>
-  route.provider === 'zen' ? { source: OPENCODE_MARK, alt: 'OpenCode', width: 13, height: 16 }
-  : route.provider === 'openrouter' ? { source: OPENROUTER_MARK, alt: 'OpenRouter', width: 16, height: 12 }
-  : { source: TYPESAFE_MARK, alt: 'TypeSafe', width: 12, height: 18 }
-// The band when the context is swamped: murky green, bubbles rising, slow ripples.
-const SWAMP_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="440" height="64" viewBox="0 0 360 30" preserveAspectRatio="xMaxYMid slice"><style>:root{color-scheme:light dark}html,body{margin:0}svg{background:transparent;display:block}.b{fill:none;stroke:#cfe8b8;stroke-width:.5;opacity:0;animation-name:rise;animation-timing-function:ease-in;animation-iteration-count:infinite}@keyframes rise{0%{opacity:0;transform:translate(0,0)}15%{opacity:.7}80%{opacity:.5}100%{opacity:0;transform:translate(3px,-30px)}}.rp{fill:none;stroke:#a7c98f;stroke-width:.4;stroke-linecap:round;opacity:.25;animation:drift 7s ease-in-out infinite}@keyframes drift{0%,100%{transform:translate(0,0);opacity:.15}50%{transform:translate(4px,0);opacity:.4}}.mk{animation:mk 8s ease-in-out infinite}@keyframes mk{0%,100%{opacity:.85}50%{opacity:1}}</style><defs><linearGradient id="bog" x1="0" x2="1"><stop offset=".43" stop-color="#4f7a3a" stop-opacity="0"/><stop offset=".62" stop-color="#4f7a3a" stop-opacity=".16"/><stop offset=".85" stop-color="#6f9a4f" stop-opacity=".32"/><stop offset="1" stop-color="#9cc27a" stop-opacity=".42"/></linearGradient><linearGradient id="silt" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset=".6" stop-color="#2b3a1f" stop-opacity=".18"/><stop offset="1" stop-color="#1c2614" stop-opacity=".45"/></linearGradient><linearGradient id="fade" x1="0" x2="1"><stop offset=".43" stop-color="#fff" stop-opacity="0"/><stop offset=".7" stop-color="#fff" stop-opacity="1"/></linearGradient><mask id="m"><rect width="360" height="30" fill="url(#fade)"/></mask><pattern id="grain" width="2" height="2" patternUnits="userSpaceOnUse"><rect width=".6" height=".6" fill="#fff" fill-opacity=".06"/></pattern></defs><g mask="url(#m)"><rect class="mk" width="360" height="30" fill="url(#bog)"/><rect width="360" height="30" fill="url(#silt)"/><rect width="360" height="30" fill="url(#grain)"/><path class="rp" style="animation-delay:-0s" d="M190 22 q6 -2 12 0 t12 0"/><path class="rp" style="animation-delay:-2.5s" d="M226 9 q6 -2 12 0 t12 0"/><path class="rp" style="animation-delay:-5s" d="M250 18 q6 -2 12 0 t12 0"/><path class="rp" style="animation-delay:-1.5s" d="M300 24 q6 -2 12 0 t12 0"/><path class="rp" style="animation-delay:-3.8s" d="M322 7 q6 -2 12 0 t12 0"/><circle class="b" cx="168" cy="32" r="1.6" style="animation-duration:6.5s;animation-delay:-0s"/><circle class="b" cx="182" cy="32" r="1.1" style="animation-duration:8s;animation-delay:-2.1s"/><circle class="b" cx="197" cy="32" r="2.0" style="animation-duration:7s;animation-delay:-4.2s"/><circle class="b" cx="210" cy="32" r="1.3" style="animation-duration:9s;animation-delay:-1.0s"/><circle class="b" cx="224" cy="32" r="1.7" style="animation-duration:7.5s;animation-delay:-3.3s"/><circle class="b" cx="238" cy="32" r="1.0" style="animation-duration:8.5s;animation-delay:-5.1s"/><circle class="b" cx="252" cy="32" r="1.4" style="animation-duration:6.8s;animation-delay:-2.6s"/><circle class="b" cx="176" cy="32" r="0.9" style="animation-duration:9.5s;animation-delay:-6.0s"/><circle class="b" cx="232" cy="32" r="0.8" style="animation-duration:10s;animation-delay:-0.5s"/></g></svg>`
-// The band when a usage limit is close: embers, sparks rising.
-const EMBER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="440" height="64" viewBox="0 0 360 30" preserveAspectRatio="xMaxYMid slice"><style>:root{color-scheme:light dark}html,body{margin:0}svg{background:transparent;display:block}.s{fill:#ffb06a;opacity:0;animation-name:up;animation-timing-function:ease-out;animation-iteration-count:infinite}@keyframes up{0%{opacity:0;transform:translate(0,0)}12%{opacity:.95}70%{opacity:.6}100%{opacity:0;transform:translate(4px,-30px)}}.br{animation:br 3.4s ease-in-out infinite}@keyframes br{0%,100%{opacity:.8}50%{opacity:1}}.br2{animation:br2 2.2s ease-in-out infinite}@keyframes br2{0%,100%{opacity:.7}40%{opacity:1}70%{opacity:.8}}</style><defs><linearGradient id="heat" x1="0" x2="1"><stop offset=".43" stop-color="#b8461b" stop-opacity="0"/><stop offset=".62" stop-color="#b8461b" stop-opacity=".16"/><stop offset=".85" stop-color="#d9622a" stop-opacity=".32"/><stop offset="1" stop-color="#f08a3c" stop-opacity=".42"/></linearGradient><linearGradient id="glow" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset=".55" stop-color="#e2581f" stop-opacity=".08"/><stop offset="1" stop-color="#ff7a2e" stop-opacity=".32"/></linearGradient><linearGradient id="fade" x1="0" x2="1"><stop offset=".43" stop-color="#fff" stop-opacity="0"/><stop offset=".7" stop-color="#fff" stop-opacity="1"/></linearGradient><mask id="m"><rect width="360" height="30" fill="url(#fade)"/></mask><pattern id="grain" width="2" height="2" patternUnits="userSpaceOnUse"><rect width=".6" height=".6" fill="#fff" fill-opacity=".06"/></pattern></defs><g mask="url(#m)"><rect class="br" width="360" height="30" fill="url(#heat)"/><rect class="br2" width="360" height="30" fill="url(#glow)"/><circle class="s" cx="166" cy="31" r="0.7" style="animation-duration:3.2s;animation-delay:-0s"/><circle class="s" cx="178" cy="31" r="0.5" style="animation-duration:4.1s;animation-delay:-1.2s"/><circle class="s" cx="191" cy="31" r="0.8" style="animation-duration:3.6s;animation-delay:-2.4s"/><circle class="s" cx="203" cy="31" r="0.5" style="animation-duration:4.6s;animation-delay:-0.7s"/><circle class="s" cx="216" cy="31" r="0.7" style="animation-duration:3.9s;animation-delay:-3.0s"/><circle class="s" cx="228" cy="31" r="0.6" style="animation-duration:4.3s;animation-delay:-1.8s"/><circle class="s" cx="241" cy="31" r="0.8" style="animation-duration:3.4s;animation-delay:-0.4s"/><circle class="s" cx="254" cy="31" r="0.5" style="animation-duration:4.8s;animation-delay:-2.9s"/><circle class="s" cx="184" cy="31" r="0.4" style="animation-duration:5.0s;animation-delay:-3.6s"/><circle class="s" cx="236" cy="31" r="0.4" style="animation-duration:4.4s;animation-delay:-2.1s"/><rect width="360" height="30" fill="url(#grain)"/></g></svg>`
-// The band when the judge the person picked is failing: signal lost, a blip sweeping along a flat line.
-const DOWN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="440" height="64" viewBox="0 0 360 30" preserveAspectRatio="xMaxYMid slice"><style>:root{color-scheme:light dark}html,body{margin:0}svg{background:transparent;display:block}.tr{fill:none;stroke:#e6ecf8;stroke-width:.6;stroke-linecap:round;stroke-linejoin:round}.gw{fill:none;stroke:#9fb0d6;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;opacity:.35}.hd{animation:hd 4.8s linear infinite}@keyframes hd{0%{transform:translate(150px,0)}88%,100%{transform:translate(372px,0)}}.gl{animation:gl 4.8s ease-in-out infinite}@keyframes gl{0%,100%{opacity:.75}50%{opacity:1}}</style><defs><linearGradient id="steel" x1="0" x2="1"><stop offset=".43" stop-color="#5d6a86" stop-opacity="0"/><stop offset=".65" stop-color="#5d6a86" stop-opacity=".16"/><stop offset=".88" stop-color="#7d8aa8" stop-opacity=".32"/><stop offset="1" stop-color="#a3afca" stop-opacity=".42"/></linearGradient><radialGradient id="glow" cx="330" cy="15" r="80" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#c4cee6" stop-opacity=".22"/><stop offset="1" stop-color="#8d9ab8" stop-opacity="0"/></radialGradient><pattern id="grid" width="7.5" height="7.5" patternUnits="userSpaceOnUse"><path d="M7.5 0 L0 0 L0 7.5" fill="none" stroke="#fff" stroke-opacity=".06" stroke-width=".25"/></pattern><linearGradient id="trail" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".85" stop-color="#fff" stop-opacity=".55"/><stop offset="1" stop-color="#fff" stop-opacity="1"/></linearGradient><linearGradient id="fade" x1="0" x2="1"><stop offset=".43" stop-color="#fff" stop-opacity="0"/><stop offset=".7" stop-color="#fff" stop-opacity="1"/></linearGradient><mask id="m"><rect width="360" height="30" fill="url(#fade)"/></mask><mask id="sweep"><g class="hd"><rect x="-110" y="0" width="110" height="30" fill="url(#trail)"/></g></mask></defs><g mask="url(#m)"><rect class="gl" width="360" height="30" fill="url(#steel)"/><rect width="360" height="30" fill="url(#glow)"/><rect width="360" height="30" fill="url(#grid)"/><g mask="url(#sweep)"><g transform="translate(0 3.5)"><path class="gw" d="M150 15 L196 15 L196.0 15.0 L199.0 13.8 L202.0 15.0 L204.0 15.0 L205.5 16.5 L208.0 5.0 L210.5 19.0 L212.0 15.0 L216.0 15.0 L220.0 13.0 L224.0 15.0 L238 15 L238.0 15.0 L241.0 14.2 L244.0 15.0 L246.0 15.0 L247.5 16.1 L250.0 8.0 L252.5 17.8 L254.0 15.0 L258.0 15.0 L262.0 13.6 L266.0 15.0 L278 15 L278.0 15.0 L281.0 14.5 L284.0 15.0 L286.0 15.0 L287.5 15.6 L290.0 11.2 L292.5 16.5 L294.0 15.0 L298.0 15.0 L302.0 14.2 L306.0 15.0 L316 15 L316.0 15.0 L319.0 14.9 L322.0 15.0 L324.0 15.0 L325.5 15.2 L328.0 13.8 L330.5 15.5 L332.0 15.0 L336.0 15.0 L340.0 14.8 L344.0 15.0 L360 15"/><path class="tr" d="M150 15 L196 15 L196.0 15.0 L199.0 13.8 L202.0 15.0 L204.0 15.0 L205.5 16.5 L208.0 5.0 L210.5 19.0 L212.0 15.0 L216.0 15.0 L220.0 13.0 L224.0 15.0 L238 15 L238.0 15.0 L241.0 14.2 L244.0 15.0 L246.0 15.0 L247.5 16.1 L250.0 8.0 L252.5 17.8 L254.0 15.0 L258.0 15.0 L262.0 13.6 L266.0 15.0 L278 15 L278.0 15.0 L281.0 14.5 L284.0 15.0 L286.0 15.0 L287.5 15.6 L290.0 11.2 L292.5 16.5 L294.0 15.0 L298.0 15.0 L302.0 14.2 L306.0 15.0 L316 15 L316.0 15.0 L319.0 14.9 L322.0 15.0 L324.0 15.0 L325.5 15.2 L328.0 13.8 L330.5 15.5 L332.0 15.0 L336.0 15.0 L340.0 14.8 L344.0 15.0 L360 15"/></g></g></g></svg>`
-// The right of the setup guide, pure decoration (the name is on the left): a purple gradient with a soft glow,
-// faint light streaks and grain, a still star, and small sparkles that twinkle in and out here and there. One constant source, so the app never rebuilds its frame (a changing source flickers); the
-// motion is CSS inside it.
-const BRAND_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="440" height="64" viewBox="0 0 360 30" preserveAspectRatio="xMaxYMid slice"><style>:root{color-scheme:light dark}html,body{margin:0}svg{background:transparent;display:block}.sp{fill:#fff;opacity:0;transform:scale(0);animation-name:gl;animation-timing-function:ease-in-out;animation-iteration-count:infinite}@keyframes gl{0%,72%,100%{opacity:0;transform:scale(0) rotate(0deg)}82%{opacity:.9;transform:scale(1) rotate(30deg)}92%{opacity:0;transform:scale(.2) rotate(60deg)}}.br{animation:br 6s ease-in-out infinite}@keyframes br{0%,100%{opacity:.85}50%{opacity:1}}</style><defs><linearGradient id="bg" x1="0" x2="1"><stop offset=".43" stop-color="#7c6cf0" stop-opacity="0"/><stop offset=".62" stop-color="#7c6cf0" stop-opacity=".16"/><stop offset=".85" stop-color="#8f7ff0" stop-opacity=".34"/><stop offset="1" stop-color="#b3a6ff" stop-opacity=".48"/></linearGradient><radialGradient id="glow" cx="320" cy="15" r="70" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#c9bdff" stop-opacity=".28"/><stop offset="1" stop-color="#9a86ff" stop-opacity="0"/></radialGradient><linearGradient id="fade" x1="0" x2="1"><stop offset=".43" stop-color="#fff" stop-opacity="0"/><stop offset=".7" stop-color="#fff" stop-opacity="1"/></linearGradient><mask id="m"><rect width="360" height="30" fill="url(#fade)"/></mask><pattern id="grain" width="2" height="2" patternUnits="userSpaceOnUse"><rect width=".6" height=".6" fill="#fff" fill-opacity=".07"/></pattern></defs><g mask="url(#m)"><rect class="br" width="360" height="30" fill="url(#bg)"/><rect width="360" height="30" fill="url(#glow)"/><rect width="360" height="30" fill="url(#grain)"/><line x1="186" y1="32" x2="198" y2="-2" stroke="#fff" stroke-opacity="0.04" stroke-width="3"/><line x1="204" y1="32" x2="216" y2="-2" stroke="#fff" stroke-opacity="0.05" stroke-width="1.2"/><line x1="226" y1="32" x2="238" y2="-2" stroke="#fff" stroke-opacity="0.05" stroke-width="4"/><line x1="262" y1="32" x2="274" y2="-2" stroke="#fff" stroke-opacity="0.04" stroke-width="1.5"/><line x1="290" y1="32" x2="302" y2="-2" stroke="#fff" stroke-opacity="0.05" stroke-width="3"/><line x1="320" y1="32" x2="332" y2="-2" stroke="#fff" stroke-opacity="0.04" stroke-width="1.2"/><path class="sp" style="transform-origin:168px 8px;animation-duration:4.2s;animation-delay:0.3s" d="M168 6.4 L168.34 7.66 L169.6 8 L168.34 8.34 L168 9.6 L167.66 8.34 L166.4 8 L167.66 7.66 Z"/><path class="sp" style="transform-origin:182px 22px;animation-duration:5.1s;animation-delay:2.1s" d="M182 20.7 L182.27 21.73 L183.3 22 L182.27 22.27 L182 23.3 L181.73 22.27 L180.7 22 L181.73 21.73 Z"/><path class="sp" style="transform-origin:196px 6px;animation-duration:3.8s;animation-delay:1.2s" d="M196 4.2 L196.38 5.62 L197.8 6 L196.38 6.38 L196 7.8 L195.62 6.38 L194.2 6 L195.62 5.62 Z"/><path class="sp" style="transform-origin:208px 19px;animation-duration:4.6s;animation-delay:3.4s" d="M208 17.8 L208.25 18.75 L209.2 19 L208.25 19.25 L208 20.2 L207.75 19.25 L206.8 19 L207.75 18.75 Z"/><path class="sp" style="transform-origin:221px 9px;animation-duration:5.4s;animation-delay:0.9s" d="M221 7.5 L221.31 8.69 L222.5 9 L221.31 9.31 L221 10.5 L220.69 9.31 L219.5 9 L220.69 8.69 Z"/><path class="sp" style="transform-origin:232px 23px;animation-duration:4.0s;animation-delay:2.7s" d="M232 21.9 L232.23 22.77 L233.1 23 L232.23 23.23 L232 24.1 L231.77 23.23 L230.9 23 L231.77 22.77 Z"/><path class="sp" style="transform-origin:244px 7px;animation-duration:4.8s;animation-delay:1.8s" d="M244 5.7 L244.27 6.73 L245.3 7 L244.27 7.27 L244 8.3 L243.73 7.27 L242.7 7 L243.73 6.73 Z"/><path class="sp" style="transform-origin:176px 15px;animation-duration:5.8s;animation-delay:4.0s" d="M176 14.0 L176.21 14.79 L177.0 15 L176.21 15.21 L176 16.0 L175.79 15.21 L175.0 15 L175.79 14.79 Z"/><path class="sp" style="transform-origin:214px 26px;animation-duration:4.4s;animation-delay:3.0s" d="M214 25.0 L214.21 25.79 L215.0 26 L214.21 26.21 L214 27.0 L213.79 26.21 L213.0 26 L213.79 25.79 Z"/><path class="sp" style="transform-origin:238px 15px;animation-duration:3.6s;animation-delay:0.1s" d="M238 14.0 L238.21 14.79 L239.0 15 L238.21 15.21 L238 16.0 L237.79 15.21 L237.0 15 L237.79 14.79 Z"/></g></svg>`
-
-// The handoff card once it has landed: the brand's art in green, with a big dark checkmark on the right.
-// The dashboard sits there all the time, so it is grey: purple is kept for the moments that ask for attention. Its
-// art is the brand's, in grey and at 40% of its strength; only the ✦ keeps the accent.
-const DASH_SVG = BRAND_SVG.replace(/stop-opacity="([0-9.]+)"/g, (_m, v: string) => `stop-opacity="${(Number(v) * 0.4).toFixed(3)}"`)
-  .replace(/#(7c6cf0|8f7ff0|b3a6ff|c9bdff|9a86ff)/g, '#9a9aa2')
-let DASH_BG = '#141416'
-let DASH_EDGE = '#2a2a2f'
-/** The settings title's word in the website hero's style: crisp, going soft and grainy at its bottom right (a radial
- * mask fades the crisp copy out there and a copy through the site's #grainy filter takes over). The app gives the image
- * the band's font. */
-// The word is held to the image's width (textLength): an image draws in its own fallback font, wider than the app's,
-// and "effortless" was cut to "effortles".
-const SETTINGS_TITLE = `<svg xmlns="http://www.w3.org/2000/svg" width="92" height="28" viewBox="0 0 92 28"><defs><radialGradient id="c" cx="1" cy="1" r=".75" gradientTransform="matrix(.7 0 0 2.3 .3 -1.3)"><stop offset=".35" stop-color="#000"/><stop offset="1" stop-color="#fff"/></radialGradient><radialGradient id="s" cx=".9" cy=".85" r=".55" gradientTransform="matrix(.7 0 0 2.3 .27 -1.1)"><stop offset=".4" stop-color="#fff"/><stop offset="1" stop-color="#000"/></radialGradient><mask id="mc"><rect width="92" height="28" fill="url(#c)"/></mask><mask id="ms"><rect width="92" height="28" fill="url(#s)"/></mask><filter id="g" x="-20%" y="-40%" width="140%" height="180%"><feTurbulence type="fractalNoise" baseFrequency="1.4" numOctaves="1" seed="7" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="2.5" xChannelSelector="R" yChannelSelector="G" result="moved"/><feGaussianBlur in="moved" stdDeviation="0.35" result="soft"/><feComponentTransfer in="noise" result="dots"><feFuncA type="discrete" tableValues="0 1 1 1 1"/></feComponentTransfer><feComposite in="soft" in2="dots" operator="in"/></filter></defs><g font-size="21" font-weight="600" letter-spacing="-.5"><text x="1" y="20" textLength="89" lengthAdjust="spacingAndGlyphs" fill="#ffffff" mask="url(#mc)">effortless</text><g mask="url(#ms)"><text x="1" y="20" textLength="89" lengthAdjust="spacingAndGlyphs" fill="#ffffff" filter="url(#g)">effortless</text></g></g></svg>`
-/** The mark as the settings bar shows it: big, tilted and faint, cut off by the bar. */
-const SETTINGS_MARK = MARK_SVG.replace('<g mask=', '<g opacity=".2" transform="rotate(9 50 50)" mask=')
-// The dashboard's mark (see dash-mark): its size, and its look with Auto off.
-const DASH_MARK_SIZE = 18
-const DASH_MARK_OFF = MARK_SVG.replace('<g mask=', '<g opacity=".35" mask=')
 /** How long a band's entrance runs: it is drawn only this long after the band appears, since every redraw of the band
  * (a choice, the minute tick) would replay it. */
 const INTRO_MS = 1300
 // The band last drawn above the prompt, and when it appeared (see introShows).
 let introKind = ''
 let introAt = 0
-/** Whether the band of `kind` is still in its entrance: true for INTRO_MS after it replaced another band. */
-/** An animated Svg drawn `elapsedMs` into its animations. Every redraw rebuilds the band and starts its images' CSS
- * animations over; with this, a redraw mid-animation picks it up where it was instead of jumping back. */
-export function inPhase(svg: string, elapsedMs: number): string {
-  return svg.replace('</svg>', `<style>svg *{animation-delay:${(-Math.max(0, elapsedMs) / 1000).toFixed(3)}s !important}</style></svg>`)
-}
 // How far the entrance on screen is, for introLayer.
 let introElapsed = 0
 // Set when a band replaces another, taken by the first draw of the new one.
@@ -320,211 +178,7 @@ function introLayer(els: { Box: unknown; Svg?: unknown }, key: string, show: boo
     </B>
   )
 }
-/** The settings panel's top bar: a shade above the band. */
-let DASH_HEAD = '#18181b'
-const DASH_TEXT = '#d4d4d8'
-/** The dashboard's quieter figures: the cache countdown while it has time left. */
-const DASH_DIM = '#8b8b93'
-// A settings card under the pointer: a shade up from the band, its edge a shade up from that.
-let CARD_HOVER = '#1c1c20'
-let CARD_HOVER_EDGE = '#3b3b42'
-const DONE_SVG = BRAND_SVG
-  .replace(/#7c6cf0/g, '#2fae62').replace(/#8f7ff0/g, '#3cc472').replace(/#b3a6ff/g, '#7fe0a4')
-  .replace(/#c9bdff/g, '#b4f0c8').replace(/#9a86ff/g, '#4fd486')
-  .replace('</g></svg>', '<path d="M323 15.5 L330 22 L345 7.5" fill="none" stroke="#0c3a20" stroke-opacity=".8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g></svg>')
-const DONE_ACCENT = '#7fe0a4'
-const DONE_BG = '#0f1c15'
-const DONE_EDGE = '#2f7a4c'
-// The mark in the done green, for the titles of cards that have landed.
-const DONE_MARK_SVG = MARK_SVG.replace(/#7566d8/g, '#2f9a5e').replace(/#a79cf7/g, '#7fe0a4').replace(/#cfc7ff/g, '#c8f4d8')
 
-// The models the judge answers for, each on its own scale.
-const JUDGED: readonly JudgedModel[] = ['haiku', 'sonnet', 'opus', 'fable']
-
-// The text is decisionbench's tuned prompt plus effortless's rules: on its 59 holdout Cases it scored a mean lift of 21.2 points
-// over 6 decision models, against 13.9 for the old text. The Haiku-as-judge path is not measured.
-const MODEL_LEVELS: Record<JudgedModel, { instructions: string; levels: Record<Effort, string> }> = {
-  haiku: {
-    instructions: 'Which effort should Claude Haiku 5.5 use for the next message? Haiku is the smallest model, so it needs more effort than a larger model for the same work: the same as the work alone suggests for a quick answer or trivial step, and one level more for any real task such as a fix, a feature, an analysis or a plan.',
-    levels: {
-      low: 'quick answer or trivial action: no tools or one simple step, no planning',
-      medium: 'normal work: a few tool calls or edits',
-      high: 'a normal task: a fix, a feature, an analysis or a plan',
-      xhigh: 'very hard: a long investigation or complex change',
-      max: 'the hardest research-level work',
-    },
-  },
-  sonnet: {
-    instructions: 'Which effort should Claude Sonnet 5.5 use for the next message?',
-    levels: {
-      low: 'quick answer or trivial action: no tools or one simple step, no planning',
-      medium: 'normal work: a few tool calls or edits',
-      high: 'hard or large multi-step job: many tool calls, mistakes are costly',
-      xhigh: 'very hard: a long investigation or complex change',
-      max: 'the hardest research-level work',
-    },
-  },
-  opus: {
-    instructions: 'Which effort should Claude Opus 5.5 use for the next message? Opus is a strong model, so it needs less effort than a smaller model for the same work: one level lower than the work alone suggests. Ordinary focused work (an explanation, a contained fix, a small feature) is low for Opus.',
-    levels: {
-      low: 'quick answer or trivial action: no tools or one simple step, no planning',
-      medium: 'normal work: a few tool calls or edits',
-      high: 'hard or large multi-step job: many tool calls, mistakes are costly',
-      xhigh: 'very hard: a long investigation or complex change',
-      max: 'the hardest research-level work',
-    },
-  },
-  fable: {
-    instructions: 'Which effort should Claude Fable 5.1 use for the next message? Fable is the strongest model, so it needs the least effort for the same work: one or two levels lower than the work alone suggests. Ordinary focused work (an explanation, a contained fix, a small feature) is low for Fable.',
-    levels: {
-      low: 'a quick answer or everyday work: an explanation, a contained fix, a small feature',
-      medium: 'normal work: a few tool calls or edits',
-      high: 'hard or large multi-step job: many tool calls, mistakes are costly',
-      xhigh: 'very hard: a long investigation or complex change',
-      max: 'the hardest research-level work',
-    },
-  },
-}
-
-// How to judge, for Haiku and the decision models alike. It never names the effort in force: the judge rates the
-// task; keeping an effort (a "go" between steps, a message typed while a task runs) is effortless's own decision.
-const EFFORT_RULES = `Judge the scope and the amount of work, not whether it is code. A short message can ask for a lot: "go through my whole drive and clean it up", "review the entire repo", "migrate everything" are big, multi-step, tool-heavy jobs where mistakes are costly. Low is only for answers that need no tools and no planning.
-
-If the message answers a question in the assistant's last reply (picks an option, says which one, confirms a plan), judge only the work that answer starts, as the reply describes it, not the length of the answer and not the work done before the question: "B" can mean "build the complicated section B" (high), while "yes" or "no" to one small action ("should I archive this?", "delete the old ones too?") is low, and picking a value for one setting (a log level, a colour, a font) is low. But picking which way to build something ("option 1", "the same shapes", "B") starts that build: judge the build. Approving a whole plan or several steps takes the effort of that plan. A plain "yes", "ok" or "do it" after "Is that OK? Then I'll build X" or "Should I build X?" approves building X: judge X, not the word.
-
-A message that pushes back on, corrects or adds to a plan or claim under discussion continues that work: judge the effort that work needs, never low. Thanks, praise or a closing remark with no new request is low. A question about how to do something, or about effort itself, that needs no tools is low.
-
-If the person asks for deep thought ("think hard", "ultrathink", "be thorough"), pick at least high; if they ask for a quick answer, pick low.
-
-Effort levels mean a different amount of thinking on each model, so answer for each model on its own scale: the same task can need different levels on different models.`
-
-const JUDGE_SYSTEM = `You choose the reasoning effort an agentic assistant (it reads files, runs tools and edits things, not only code) should use for the user's next message: the cheapest effort that will still do the job well, once for each Claude model below.
-
-${JUDGED.map(m => `${m}: ${MODEL_LEVELS[m].instructions}\n${EFFORTS.map(e => `- ${e}: ${MODEL_LEVELS[m].levels[e]}`).join('\n')}`).join('\n\n')}
-
-${EFFORT_RULES}
-
-Reply with JSON only: {${JUDGED.map(m => `"${m}":"low|medium|high|xhigh|max"`).join(',')},"sure":0.0-1.0 how sure you are,"why":"at most 6 words, in the user's language"}`
-
-/** A judge's answer: its effort for each model it answered for, and who said it. */
-type Verdict = { efforts: Answers; why: string; by: 'decision' | 'haiku'; judgeName?: string }
-
-/** Haiku's reply as a verdict: an effort per model, one sure and why. A model with no valid level is left out; nothing
- * when no model has one. */
-export function parseVerdict(text: string): Verdict | undefined {
-  const match = text.match(/\{[\s\S]*\}/)
-  if (!match) return undefined
-  let raw: unknown
-  try {
-    raw = JSON.parse(match[0])
-  } catch {
-    return undefined
-  }
-  if (typeof raw !== 'object' || raw === null) return undefined
-  const o = raw as Record<string, unknown>
-  const sure = typeof o.sure === 'number' && o.sure >= 0 && o.sure <= 1 ? o.sure : undefined
-  const efforts: Answers = {}
-  for (const m of JUDGED) {
-    if (EFFORTS.includes(o[m] as Effort)) efforts[m] = sure === undefined ? { effort: o[m] as Effort } : { effort: o[m] as Effort, sure }
-  }
-  if (!Object.keys(efforts).length) return undefined
-  return { efforts, why: typeof o.why === 'string' ? o.why.slice(0, 60) : '', by: 'haiku' }
-}
-
-/**
- * What the judge reads besides the new message: the person's previous message and the assistant's last reply. The
- * reply is kept long and from its end, where a question with options ("A, B or C?") sits: "B" alone looks like a
- * small job, the reply says what B sets off.
- */
-async function recentContext($: EngineInterface): Promise<string> {
-  return contextFrom(await $.session.messages())
-}
-
-/** The context text from the conversation so far: the last user message, short, and the assistant's last reply's end. */
-export function contextFrom(messages: readonly { role: string; text: string }[]): string {
-  // A turn with no text of its own (a tool result, an image) says nothing: the person's last words are what count.
-  const lastUser = [...messages].reverse().find(m => m.role === 'user' && m.text.trim())
-  const lastAssistant = lastAssistantText(messages)
-  return [lastUser ? `user: ${lastUser.text.slice(0, 400)}` : '', lastAssistant ? `assistant: ${lastAssistant.slice(-2000)}` : '']
-    .filter(Boolean)
-    .join('\n')
-}
-
-/** The assistant's last reply, or nothing. */
-function lastAssistantText(messages: readonly { role: string; text: string }[]): string {
-  return [...messages].reverse().find(m => m.role === 'assistant' && m.text.trim())?.text ?? ''
-}
-
-
-// The decision models' task: the same rules as Haiku's, one typed question per model.
-const DECISION_TASK = `Choose the reasoning effort that an agentic AI assistant should use to handle the next message, for each model asked about. The assistant can read files, run tools and edit things, not only write code. Judge the scope and difficulty of the work the message asks for, taking the recent conversation into account. Pick the cheapest effort that still does the job well for that model.
-
-${EFFORT_RULES}`
-const DECISION_QUESTIONS = Object.fromEntries(
-  JUDGED.map(m => [`effort_${m}`, { type: 'choice', instructions: MODEL_LEVELS[m].instructions, criteria: MODEL_LEVELS[m].levels }]),
-)
-
-/** The skill or custom command a typed "/name args" runs, or nothing for the app's own commands and effortless's. */
-async function typedSkill($: EngineInterface, text: string): Promise<{ name: string; description: string } | undefined> {
-  const name = text.trim().slice(1).split(/\s+/)[0]
-  if (!name) return undefined
-  const found = (await $.command.list().catch(() => [])).find(c => c.name === name)
-  if (!found || !['user', 'plugin', 'mcp'].includes(found.source) || found.plugin === 'effortless') return undefined
-  return { name, description: found.description ?? '' }
-}
-
-const LEVEL_WORD = '(low|medium|high|xhigh|x-high|extra[- ]high|max|maximum)'
-const NAMED_LEVEL = new RegExp(`\\b${LEVEL_WORD}\\s+effort\\b|\\beffort(?:\\s+level)?\\s*(?:[:=]|to|at|of|on)?\\s*${LEVEL_WORD}\\b|\\bxhigh\\b`, 'gi')
-const LEVEL_OF: Record<string, Effort> = { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', 'x-high': 'xhigh', 'extra high': 'xhigh', 'extra-high': 'xhigh', max: 'max', maximum: 'max' }
-
-/**
- * The level a prompt asks for by name ("max effort", "effort: high", "xhigh"), or nothing. The word effort must sit
- * beside the level, so "a medium sized image" names nothing, and "don't use max effort" is a no. A named level runs
- * without the judge: effort-auto found Haiku also calls prompts that only describe hard work "named".
- */
-export function namedEffort(text: string): Effort | undefined {
-  for (const m of text.matchAll(NAMED_LEVEL)) {
-    const before = text.slice(Math.max(0, m.index - 20), m.index).toLowerCase()
-    if (/\b(not|no|don'?t|never|without|instead of)\b/.test(before)) continue
-    return LEVEL_OF[(m[1] ?? m[2] ?? 'xhigh').toLowerCase().replace(/\s+/, ' ')]
-  }
-  return undefined
-}
-
-/** A short follow-up such as "go", "ok", "yes", "continue": two words and a dozen characters at most. */
-export function isFollowUp(text: string): boolean {
-  const t = text.trim()
-  return t.length > 0 && t.length <= 12 && t.split(/\s+/).length <= 2
-}
-
-/**
- * Whether the assistant's last reply ended on a question ("Should I archive it?", "A, B or C?"). A short message
- * after one answers it, and the answer can start a small or a big job, so it goes to the judge instead of keeping
- * the effort.
- */
-export function endsOnQuestion(context: string): boolean {
-  const reply = context.split('\nassistant: ').pop() ?? ''
-  return context.includes('assistant: ') && reply.slice(-400).includes('?')
-}
-
-/** The message as the judge reads it: images and files it carries are named, since the judge sees only text. */
-export function withAttachments(text: string, attachments?: readonly { type: string }[]): string {
-  if (!attachments?.length) return text
-  const counts = new Map<string, number>()
-  for (const a of attachments) counts.set(a.type, (counts.get(a.type) ?? 0) + 1)
-  const said = [...counts].map(([type, n]) => `${n} ${type}${n > 1 ? 's' : ''}`).join(', ')
-  return `${text}
-
-[The message comes with ${said} to look at.]`
-}
-
-/** The message as the judge reads it when it was typed while a task was still running. The effort that task runs at
- * stays out: a lower verdict waits for the turn to end (heldPick), so the running task is safe either way. */
-export function withMidTurn(text: string): string {
-  return `${text}
-
-[Sent while the assistant was still working on the last task. If it adds to, corrects or steers that task, judge the effort that task needs; judge it on its own only if it is a separate new request.]`
-}
 // A lower verdict for a message typed mid-turn, applied when that turn ends (see prompt.submit).
 let heldPick: Pick | null = null
 // Counts the changes the person makes by hand to the pick or to Auto. A judge compares it before and after: a change made
@@ -532,71 +186,8 @@ let heldPick: Pick | null = null
 // before a click that the band (another hook) had already drawn.
 let handChanges = 0
 
-/** A short follow-up that keeps the current effort: "go" between two steps, not an answer to a question. */
-export function keepsEffort(message: string, context: string): boolean {
-  return isFollowUp(message) && !endsOnQuestion(context)
-}
-
-/** The TypeSafe key in a ~/.config/jev/.env file's text. */
-export function parseTypesafeKey(text: string): string | undefined {
-  return parseEnvLine(text, 'TYPESAFE_API_KEY')
-}
-
-/** A typed or pasted TypeSafe key: a TYPESAFE_API_KEY=… line gives its value (none when empty), else the text itself. */
-function typedTypesafeKey(text: string): string | undefined {
-  return /^\s*TYPESAFE_API_KEY\s*=/.test(text) ? parseTypesafeKey(text) : text
-}
-
-/** A NAME=value line's value in an .env file's text, quotes taken off. */
-export function parseEnvLine(text: string, name: string): string | undefined {
-  const value = text.match(new RegExp(`^\\s*${name}\\s*=\\s*(.*?)\\s*$`, 'm'))?.[1].replace(/^['"]|['"]$/g, '')
-  return value || undefined
-}
-
 // The band's words when effortless kept the effort because the judge was unsure.
 const UNSURE = 'unsure, keeping'
-/** A decision model below even odds on this model's effort. Haiku's own sure (self-reported) only tips the slider. */
-export const isUnsure = (by: Verdict['by'] | Pick['by'], answer: ModelAnswer | undefined) => by === 'decision' && (answer?.sure ?? 1) < 0.5
-
-/**
- * A decision model's reply as a verdict: each model's choice and how sure it was (its confidence, else the choice's
- * probability), as given. The answers may sit under `answers`, `result.answers` or at the top level. A model with no
- * valid level is left out; nothing when no model has one. Whether an answer is sure enough is the caller's call.
- */
-export function parseDecisionAnswer(text: string): Verdict | undefined {
-  let json: unknown
-  try {
-    json = JSON.parse(text)
-  } catch {
-    return undefined
-  }
-  if (typeof json !== 'object' || json === null) return undefined
-  const o = json as Record<string, any>
-  const answers = (o.answers ?? o.result?.answers ?? o) as Record<string, { choice?: string; confidence?: number; probabilities?: Record<string, number> } | undefined>
-  const efforts: Answers = {}
-  for (const m of JUDGED) {
-    const a = answers[`effort_${m}`]
-    const effort = a?.choice as Effort | undefined
-    if (!effort || !EFFORTS.includes(effort)) continue
-    const sure = a?.confidence ?? a?.probabilities?.[effort]
-    efforts[m] = typeof sure === 'number' ? { effort, sure } : { effort }
-  }
-  return Object.keys(efforts).length ? { efforts, why: '', by: 'decision' } : undefined
-}
-
-/** How sure a decision model was, in the band's words ("70% sure"); nothing when it did not say. */
-const sureWords = (answer: ModelAnswer) => (answer.sure !== undefined ? `${Math.round(answer.sure * 100)}% sure` : '')
-
-/** A verdict's answers in a line: "haiku max · sonnet high · opus medium 40% (unsure)", for debug and the panel's Test. */
-export function answersText(v: Verdict): string {
-  return JUDGED.filter(m => v.efforts[m])
-    .map(m => {
-      const a = v.efforts[m]!
-      const sure = a.sure !== undefined && v.by === 'decision' ? ` ${Math.round(a.sure * 100)}%` : ''
-      return `${m} ${a.effort}${sure}${isUnsure(v.by, a) ? ' (unsure)' : ''}`
-    })
-    .join(' · ')
-}
 
 let askTypesafeFile: EnvAsk | undefined
 // A key was saved from the settings panel into ~/.config/jev/.env: that file wins over an older key in the settings.
@@ -620,21 +211,6 @@ async function typesafeKey($: EngineInterface): Promise<string | undefined> {
   return askTypesafeFile
 }
 
-/** Why Haiku was asked: `unsure` (a decision model was unsure of, or silent on, this model), `chain` (no decision model
- * answered; `said` names the last reason), or `only` (Haiku is the judge). `said` is what the verdict line shows. */
-type HaikuWhy = { kind: 'unsure' | 'chain' | 'only'; said: string }
-/** `haikuWhy` is set only when Haiku's verdict is the one used. `haikuMissed` is set when a decision model was unsure and
- * Haiku gave no answer: the decision model's answer stands, and the verdict line says so. */
-type Judged = { verdict?: Verdict; tokens: number; haikuWhy?: HaikuWhy; haikuMissed?: string }
-
-/** Why a judge the person picked could not answer, in words: what a status code means for them. */
-export function judgeFailure(name: string, status: number | 'timeout'): string {
-  if (status === 'timeout') return `${name} did not answer in time`
-  if (status === 401 || status === 403) return `${name} rejected the key (${status})`
-  if (status === 402) return `${name} is out of credits (${status})`
-  if (status === 429) return `${name} is rate limited (${status})`
-  return `${name} failed (${status})`
-}
 const warned = new Set<string>()
 /** Tells the person once per session and reason that their judge failed and Haiku stands in. */
 function warnJudge($: EngineInterface, reason: string) {
@@ -650,135 +226,8 @@ function warnJudge($: EngineInterface, reason: string) {
   $.ui.toast(`effortless: ${reason}. Haiku judges for now.`)
 }
 
-/** Which judge the person picked in the plugin's settings, and what it needs. */
-export type JudgeConfig = {
-  judge: 'auto' | 'haiku'
-  typesafeKey: string
-  /** Decision models asked in order before Haiku. Empty: Haiku judges alone. */
-  decisionModels: DecisionRoute[]
-  /** For the openrouter/ decision models; left empty, OPENROUTER_API_KEY is used. */
-  openrouterKey: string
-  /** How long each decision model may take, in ms. */
-  judgeTimeoutMs: number
-  /** How long all the decision models together may take before Haiku judges, in ms. */
-  judgeBudgetMs: number
-  /** A skill or slash command that writes the handoff instead of the built-in prompt, e.g. "session-handoff". */
-  handoffSkill: string
-  /** What follows the handoff: clear and carry on, clear and wait, or keep the chat and copy the handoff. The handoff
-   *  bar opens on the choice made last; this is the first one. */
-  handoffAfter: HandoffAfter
-  /** The effort slider, -2 (cheaper) to 2 (smarter): tips the judge's close calls that way. */
-  bias: number
-  /** Auto never goes below this effort. */
-  floor: Effort
-  /** Auto never goes above this effort. */
-  ceiling: Effort
-  /** What the person switched off: the footer's handoff button and any of the alert bands. */
-  hide: Hideable[]
-  /** The swamp band shows once the context fills this share of the window, in percent. */
-  swampAt: number
-  /** default: the dashboard band above the prompt; minimal: the footer's small buttons and no band. */
-  layout: 'default' | 'minimal'
-  /** Who writes a compaction's summary: Haiku 5.5 (the default, a fraction of the price) or the chat's own model. */
-  compactWith: 'haiku' | 'session'
-  /** advised: the footer slot is Compact until Haiku advises a handoff. always: it is always the Handoff button. */
-  handoffButton: 'advised' | 'always'
-  /** on: every subagent the chat sends off gets an effort picked by the judge before it starts. */
-  helpers: 'on' | 'off'
-  /** The accent colour of everything effortless draws: the brand violet, Claude orange or cherry-blossom rose. */
-  theme: ThemeName
-  /** auto: light when Claude Code's own theme is light. dark and light fix it. */
-  appearance: 'auto' | 'dark' | 'light'
-}
-
-/** The swamp thresholds the settings offer, in percent of the context window. */
-export const SWAMP_STEPS = [10, 20, 30, 40, 50, 60, 70, 80] as const
-
-/** The parts of effortless a person can switch off: the footer's (setup) and the progress bar's (setup, settings).
- * The context (swamp), running-low (hot) and cold-cache alerts can be switched off for good in Customize; the judge-down
- * alert always shows. Each alert also has its own ✕. */
-export const HIDEABLE = ['handoff', 'timer', 'reason', 'progress', 'sounds', 'swamp', 'hot', 'cold'] as const
-export type Hideable = (typeof HIDEABLE)[number]
-const JUDGE_TIMEOUT_MS = 4000
-const JUDGE_BUDGET_MS = 8000
-
 // What the app passed to register, so settings kept in the store can be laid over it at session start.
 let pluginOptions: Record<string, unknown> = {}
-let config: JudgeConfig = {
-  judge: 'auto',
-  typesafeKey: '',
-  decisionModels: [],
-  openrouterKey: '',
-  judgeTimeoutMs: JUDGE_TIMEOUT_MS,
-  judgeBudgetMs: JUDGE_BUDGET_MS,
-  handoffSkill: '',
-  handoffAfter: 'continue',
-  bias: 0,
-  floor: 'low',
-  ceiling: 'max',
-  hide: ['reason'],
-  swampAt: 70,
-  layout: 'default',
-  compactWith: 'haiku',
-  handoffButton: 'advised',
-  helpers: 'off',
-  theme: 'violet',
-  appearance: 'auto',
-}
-
-/** A setting in milliseconds: a positive whole number as typed, else undefined. */
-function validMs(s: string): number | undefined {
-  const n = Number(s)
-  return /^\d+$/.test(s) && n > 0 && Number.isSafeInteger(n) ? n : undefined
-}
-
-/** One line per judge timing the person set that is not a positive whole number, saying the default it falls back to. */
-export function timingWarnings(options: unknown): string[] {
-  const o = (options ?? {}) as Record<string, unknown>
-  return ([['judgeTimeoutMs', JUDGE_TIMEOUT_MS], ['judgeBudgetMs', JUDGE_BUDGET_MS]] as const).flatMap(([k, fallback]) => {
-    const v = typeof o[k] === 'string' ? (o[k] as string).trim() : ''
-    return v && validMs(v) === undefined ? [`${k} "${v}" is not a positive whole number of ms; using ${fallback}`] : []
-  })
-}
-
-/** The settings as the engine hands them over (defaults filled in), cleaned to the shape the judge reads. */
-export function readConfig(options: unknown): JudgeConfig {
-  const o = (options ?? {}) as Record<string, unknown>
-  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
-  const picked = str(o.judge)
-  return {
-    judge: picked === 'haiku' ? 'haiku' : 'auto',
-    typesafeKey: str(o.typesafeKey),
-    decisionModels: parseDecisionModels(str(o.decisionModels)),
-    openrouterKey: str(o.openrouterKey),
-    // Used as typed: network waits don't count toward the 10 s hook budget, so the budget is how long a prompt can be held.
-    judgeTimeoutMs: validMs(str(o.judgeTimeoutMs)) ?? JUDGE_TIMEOUT_MS,
-    judgeBudgetMs: validMs(str(o.judgeBudgetMs)) ?? JUDGE_BUDGET_MS,
-    handoffSkill: str(o.handoffSkill).replace(/^\//, ''),
-    handoffAfter: (['confirm', 'copy'] as const).find(a => a === str(o.handoffAfter)) ?? 'continue',
-    bias: Math.max(-2, Math.min(2, Math.round(Number(str(o.effortBias)) || 0))),
-    floor: EFFORTS.includes(str(o.effortFloor) as Effort) ? (str(o.effortFloor) as Effort) : 'low',
-    ceiling: EFFORTS.includes(str(o.effortCeiling) as Effort) ? (str(o.effortCeiling) as Effort) : 'max',
-    swampAt: SWAMP_STEPS.includes(Number(str(o.swampAt)) as (typeof SWAMP_STEPS)[number]) ? Number(str(o.swampAt)) : 70,
-    layout: str(o.layout) === 'minimal' ? 'minimal' : 'default',
-    compactWith: str(o.compactWith) === 'session' ? 'session' : 'haiku',
-    handoffButton: str(o.handoffButton) === 'always' ? 'always' : 'advised',
-    helpers: str(o.helpers) === 'on' ? 'on' : 'off',
-    theme: THEMES.find(t => t === str(o.theme)) ?? 'violet',
-    appearance: (['dark', 'light'] as const).find(a => a === str(o.appearance)) ?? 'auto',
-    // The judge's line is off until switched on; an empty string saved from the panel means everything shows.
-    hide: (o.hide === undefined ? 'reason' : str(o.hide))
-      .split(',')
-      .map(part => part.trim())
-      .filter((part): part is Hideable => (HIDEABLE as readonly string[]).includes(part)),
-  }
-}
-
-/** The text Haiku reads: the last turns and the next message. Not the model in use nor the effort in force: the verdict
- * answers for every model, and effortless applies the one that runs. */
-function judgeQuestion(prompt: string, context: string): string {
-  return [context ? `Recent conversation:\n${context}` : '', `Next message:\n${prompt.slice(0, 2000)}`].filter(Boolean).join('\n\n')
-}
 
 /**
  * Haiku always judges; decision models are the optional quick ones, asked first unless the setting is haiku. Haiku makes
@@ -989,9 +438,9 @@ async function askHaiku($: EngineInterface, prompt: string, context: string): Pr
   const used = lastContext && lastContext.window ? `Context used: ${Math.round(lastContext.percent)}% of the window` : ''
   const asked = [judgeQuestion(prompt, context), used].filter(Boolean).join('\n\n')
   const ask = (model: string) => $.model.complete({ model, system: JUDGE_SYSTEM, prompt: asked, maxTokens: 160, effort: 'low', timeoutMs: 6000 })
-  // Haiku 5.5 by name: Claude Code builds that predate it map the plain alias to Haiku 4.5, at ten times the price.
-  // Where 5.5 does not answer, the alias stands in.
-  let r = await ask(COMPACT_MODEL)
+  // Haiku by its pinned id: Claude Code builds that predate it map the plain alias to an older, ten-times-pricier Haiku.
+  // Where the pinned id does not answer, the alias stands in.
+  let r = await ask(HAIKU_MODEL)
   if (!r.isAnswered) r = await ask('haiku')
   const verdict = r.isAnswered ? parseVerdict(r.text) : undefined
   const tokens = r.isAnswered && r.usage ? r.usage.input_tokens + r.usage.output_tokens : 0
@@ -1003,40 +452,6 @@ async function askHaiku($: EngineInterface, prompt: string, context: string): Pr
 // reads more than the effort judge: what the chat was for, the trail of topics, the last turns, the context and the cache.
 const HANDOFF_CHECK_FROM = 30
 const HANDOFF_CHECK_EVERY = 2
-const HANDOFF_SYSTEM = `You decide whether the person should hand off now: start a fresh chat that carries over a short summary, instead of carrying on in this one. You are shown what the chat was for, the trail of what the person asked, the last turns, the next message, how full the context is and whether the cache is cold.
-
-Say yes only for a clear reason: the task just finished and the next message is something else, the topic has changed so the old context is dead weight, the chat keeps going in circles on the same problem, or a long chat now holds so much unrelated history that a clean start would be sharper. A normal next step of the same work is never a reason, a long chat by itself is not one, and neither is a high context share when the work is going well. When unsure, say no: a wrong yes costs the person more than a missed one.
-
-Reply with JSON only: {"handoff":"reason of at most 8 words, in the person's language"} for yes, or {"handoff":null} for no.`
-
-/** What the handoff check reads: the chat's purpose, a trail of the person's messages, the last reply's end. */
-export function handoffEvidence(messages: readonly { role: string; text: string }[], next: string, percent: number, cold: boolean): string {
-  const asked = messages.filter(m => m.role === 'user' && m.text.trim())
-  const first = asked[0]?.text.slice(0, 500) ?? ''
-  const trail = asked.slice(-8, -1).map(m => `- ${m.text.slice(0, 160).replace(/\s+/g, ' ')}`)
-  const reply = lastAssistantText(messages).slice(-700)
-  return [
-    first ? `What the chat was for (first message):\n${first}` : '',
-    trail.length ? `Trail of earlier messages:\n${trail.join('\n')}` : '',
-    reply ? `The assistant's last reply (its end):\n${reply}` : '',
-    `Next message:\n${next.slice(0, 600)}`,
-    `Context used: ${Math.round(percent)}% of the window; ${asked.length} messages so far; the cache is ${cold ? 'cold' : 'warm'}.`,
-  ]
-    .filter(Boolean)
-    .join('\n\n')
-}
-
-/** Reads Haiku's answer: a reason, or null for no (anything unreadable is no). */
-export function parseHandoffAnswer(text: string): string | null {
-  const match = text.match(/\{[\s\S]*\}/)
-  if (!match) return null
-  try {
-    const { handoff } = JSON.parse(match[0]) as { handoff?: unknown }
-    return typeof handoff === 'string' && handoff.trim() ? handoff.trim().slice(0, 70) : null
-  } catch {
-    return null
-  }
-}
 
 let promptsSinceHandoffCheck = 0
 /** Called with each message the person sends. Sets or clears the advice; never throws, never holds the message. */
@@ -1056,7 +471,7 @@ async function checkHandoff($: EngineInterface, next: string) {
   try {
     const evidence = handoffEvidence(await $.session.messages(), next, percent, (await cacheMinutes($)) === 0 && cacheExpires > 0)
     const ask = (model: string) => $.model.complete({ model, system: HANDOFF_SYSTEM, prompt: evidence, maxTokens: 60, effort: 'low', timeoutMs: 8000 })
-    let r = await ask(COMPACT_MODEL)
+    let r = await ask(HAIKU_MODEL)
     if (!r.isAnswered) r = await ask('haiku')
     if (!r.isAnswered) return
     const reason = parseHandoffAnswer(r.text)
@@ -1126,44 +541,6 @@ async function sessionModel($: EngineInterface): Promise<ModelKey> {
   return MODELS.find(m => id.includes(m.key))?.key ?? 'sonnet'
 }
 
-
-// Proof log: every verdict, /effort and request effort, written to EFFORTLESS_LOG, or to
-// %TEMP%/effortless-proof.log while the mod is loaded from a dev-mods folder. Off otherwise.
-const proofLines: string[] = []
-// An environment variable does not change while the session runs, so each one is asked for once. The
-// engine wants the name spelled out in every $.env.get call, hence one small getter per variable.
-type EnvAsk = Promise<string | undefined> | undefined
-let askLog: EnvAsk
-let askTemp: EnvAsk
-let askTmpdir: EnvAsk
-let askTypesafeUrl: EnvAsk
-let askTypesafeKey: EnvAsk
-let askOpenRouterKey: EnvAsk
-let askUserProfile: EnvAsk
-let askHome: EnvAsk
-const envLog = ($: EngineInterface) => (askLog = askLog ?? $.env.get('EFFORTLESS_LOG'))
-const envTemp = ($: EngineInterface) => (askTemp = askTemp ?? $.env.get('TEMP'))
-const envTmpdir = ($: EngineInterface) => (askTmpdir = askTmpdir ?? $.env.get('TMPDIR'))
-const envTypesafeUrl = ($: EngineInterface) => (askTypesafeUrl = askTypesafeUrl ?? $.env.get('TYPESAFE_URL'))
-const envTypesafeKey = ($: EngineInterface) => (askTypesafeKey = askTypesafeKey ?? $.env.get('TYPESAFE_API_KEY'))
-const envOpenRouterKey = ($: EngineInterface) => (askOpenRouterKey = askOpenRouterKey ?? $.env.get('OPENROUTER_API_KEY'))
-const envUserProfile = ($: EngineInterface) => (askUserProfile = askUserProfile ?? $.env.get('USERPROFILE'))
-const envHome = ($: EngineInterface) => (askHome = askHome ?? $.env.get('HOME'))
-
-async function proofPath($: EngineInterface): Promise<string | undefined> {
-  const named = await envLog($)
-  if (named) return named
-  if (!$.plugin.root.replace(/\\/g, '/').includes('/dev-mods/')) return undefined
-  const tmp = (await envTemp($)) ?? (await envTmpdir($)) ?? '/tmp'
-  return `${tmp}/effortless-proof.log`
-}
-async function proof($: EngineInterface, line: string) {
-  const path = await proofPath($).catch(() => undefined)
-  if (!path) return
-  proofLines.push(`${new Date().toISOString()} ${line}`)
-  await $.fs.write(path, proofLines.slice(-200).join('\n') + '\n').catch(() => undefined)
-}
-
 // The effort the engine itself last asked for on the main loop (the app's setting; this mod only
 // rewrites the request, never the setting). It changing means the person set it (the app's Effort
 // control, their own /effort): that wins and Auto goes off.
@@ -1176,7 +553,6 @@ let lastRequest: { index: number; appModel: string; appEffort: unknown; model: s
 let lastTyped = ''
 // The toast about pressing Enter is shown once; on every click it is only noise.
 let toldAboutEnter = false
-let lastFooter = ''
 
 /**
  * Types a slash command into the prompt box for the person to send with Enter. A command the person
@@ -1198,48 +574,6 @@ async function typeCommand($: EngineInterface, text: string): Promise<boolean> {
   } catch {
     return false
   }
-}
-
-/**
- * The tally in its current shape. A hot reload keeps the state an older version wrote ({ requests, actual,
- * baseline } before 0.2.0), so every read goes through this.
- */
-export function asSpent(t: unknown): Spent {
-  const v = (t ?? {}) as Partial<Spent>
-  const num = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : 0)
-  const judged = (v.judge ?? {}) as Partial<Spent['judge']>
-  return {
-    prompts: num(v.prompts),
-    requests: num(v.requests),
-    input: num(v.input),
-    write: num(v.write),
-    read: num(v.read),
-    out: num(v.out),
-    byEffort: v.byEffort && typeof v.byEffort === 'object' ? v.byEffort : {},
-    judge: {
-      decision: num(judged.decision),
-      haikuUnsure: num(judged.haikuUnsure),
-      haikuNoAnswer: num(judged.haikuNoAnswer),
-      haikuOnly: num(judged.haikuOnly),
-      ms: num(judged.ms),
-      tokens: num(judged.tokens),
-    },
-    helpers: {
-      runs: v.helpers?.runs && typeof v.helpers.runs === 'object' ? v.helpers.runs : {},
-      requests: num(v.helpers?.requests),
-      cost: num(v.helpers?.cost),
-    },
-  }
-}
-
-/** A request's tokens weighted by price, in input-token terms (see WEIGHT). */
-export function weighted(usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null }): number {
-  return (
-    (usage.input_tokens ?? 0) * WEIGHT.input +
-    (usage.cache_creation_input_tokens ?? 0) * WEIGHT.write +
-    (usage.cache_read_input_tokens ?? 0) * WEIGHT.read +
-    (usage.output_tokens ?? 0) * WEIGHT.out
-  )
 }
 
 /** Adds one request Auto steered: every kind of token it used, under the effort it ran at. */
@@ -1285,23 +619,6 @@ async function countPrompt($: EngineInterface, effort: Effort | undefined, kind:
   })
 }
 
-/** The cache lifetime a response's writes got, when it says; nothing when it wrote nothing or does not say. */
-export function cacheTtlOf(usage: unknown): keyof typeof CACHE_TTL | undefined {
-  const c = (usage as { cache_creation?: { ephemeral_1h_input_tokens?: number; ephemeral_5m_input_tokens?: number } } | null)
-    ?.cache_creation
-  if ((c?.ephemeral_1h_input_tokens ?? 0) > 0) return '1h'
-  if ((c?.ephemeral_5m_input_tokens ?? 0) > 0) return '5m'
-  return undefined
-}
-
-/** Most of the prompt came from the cache: it was still warm. */
-export function mostlyCached(usage: unknown): boolean {
-  const u = (usage ?? {}) as { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
-  const read_ = u.cache_read_input_tokens ?? 0
-  const all = read_ + (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
-  return all > 0 && read_ / all > 0.5
-}
-
 /** Save mode on or off: Auto stays at medium or below until the limit resets. The hot band's button and
  *  /effortless save. Says what it did. */
 async function toggleSave($: EngineInterface): Promise<string> {
@@ -1323,46 +640,6 @@ async function coldWorth($: EngineInterface): Promise<number | null> {
   const tokens = lastContext?.tokens
   if (coldForced) return tokens ?? 0
   return tokens !== undefined && tokens >= COLD_MIN_TOKENS ? tokens : null
-}
-
-/** The countdown's colour for whole minutes left (rounded up, as cacheMinutes gives): none (grey), yellow or red. */
-export function cacheColor(minutesLeft: number): string | undefined {
-  const shown = minutesLeft - 1
-  if (minutesLeft <= 0) return ICE
-  if (shown > CACHE_YELLOW_MIN) return undefined
-  return shown <= CACHE_RED_MIN ? RED : YELLOW
-}
-
-/** The footer's words for the time left: "58m", "<1m", or "Cold". */
-export function cacheLabel(minutesLeft: number): string {
-  if (minutesLeft <= 0) return '❄ Cold'
-  if (minutesLeft === 1) return '<1m'
-  return `${minutesLeft - 1}m`
-}
-
-/** The dashboard's countdown to the second: "58:41", or "Cold" once it ran out. */
-export function cacheClock(msLeft: number): string {
-  if (msLeft <= 0) return '❄ Cold'
-  const s = Math.ceil(msLeft / 1000)
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
-
-/** How many seconds the countdown image carries: the band is redrawn once a minute, with some slack. */
-const CLOCK_FRAMES = 75
-/** The dashboard's countdown as an image that ticks by itself: one frame per second, each shown for its second by a
- * CSS animation. The band is redrawn only once a minute: every redraw rebuilds the band, which restarts every image's
- * animation (the Handoff glow restarted each second while the band was redrawn for the seconds). The app sets the
- * image's font and colour to the band's, so the digits match the text around them. */
-export function cacheClockSvg(msLeft: number, color: string): string {
-  const start = Math.max(0, Math.ceil(msLeft / 1000))
-  const frames: string[] = []
-  for (let j = 0; j < CLOCK_FRAMES && start - j > 0; j++) {
-    const left = start - j
-    const label = `cache ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`
-    frames.push(`<text x="0" y="12.5" style="animation-delay:${j}s">${label}</text>`)
-  }
-  frames.push(`<text x="0" y="12.5" style="animation-delay:${frames.length}s;animation-duration:100000s">❄ Cold</text>`)
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="84" height="17" viewBox="0 0 84 17"><style>text{font-size:13px;fill:${color};opacity:0;animation:f 1s step-end 1}@keyframes f{0%{opacity:1}100%{opacity:0}}</style>${frames.join('')}</svg>`
 }
 
 let cacheTtl: keyof typeof CACHE_TTL = '1h'
@@ -1399,20 +676,6 @@ const SWAMP_REGROW = 50_000
 /** Whether the context is swamped, from the status line's figures. Cheap: no counting, no model call. */
 // A usage window this full shows the running-hot band.
 const HOT_PERCENT = 80
-// Closed, the running-hot band stays away for the rest of its window, and comes back once at this many percent.
-export const HOT_FINAL = 95
-
-/** The running-hot band closed with its cross: the window (kind and reset time) and how full it was then. */
-export type HotClosed = { window: string; percent: number }
-const hotWindow = (heat: { kind: string; resetsAt: string | null }) =>
-  // To the quarter hour: the reset time the app reports can shift by seconds between checks.
-  `${heat.kind} ${heat.resetsAt ? Math.round(new Date(heat.resetsAt).getTime() / 900_000) : ''}`
-
-/** Whether the running-hot band shows: always until closed; closed, not again in that window unless it passes HOT_FINAL. */
-export function hotVisible(heat: { kind: string; percent: number; resetsAt: string | null }, closed: HotClosed | null): boolean {
-  if (!closed || closed.window !== hotWindow(heat)) return true
-  return heat.percent >= HOT_FINAL && closed.percent < HOT_FINAL
-}
 
 let hotClosedLoaded = false
 /** The closed band as the store keeps it, read once per session (a new chat starts with the atom empty). */
@@ -1443,36 +706,6 @@ async function checkHot($: EngineInterface, limits: readonly { kind: string; per
   }
   const until = await read($, saveUntil)
   if (until !== null && (await $.clock.now()) >= until) await update($, saveUntil, () => null)
-}
-
-/** "14:20" for a reset time today, "Mon 14:20" further out. */
-export function resetLabel(iso: string | null, now: number): string {
-  if (!iso) return ''
-  const at = new Date(iso)
-  const hm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
-  return at.getTime() - now < 20 * 3600_000 ? hm : `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][at.getDay()]} ${hm}`
-}
-
-/**
- * The effort slider tips close calls only: a verdict the judge was unsure of moves one step toward cheaper or smarter.
- * The outer stops count more calls as close. A sure verdict, or one without a confidence, stays as it is.
- */
-export function tipped(effort: Effort, sure: number | undefined, bias: number): Effort {
-  if (!bias || sure === undefined || sure >= (Math.abs(bias) === 1 ? 0.65 : 0.85)) return effort
-  const i = Math.max(0, Math.min(EFFORTS.length - 1, EFFORTS.indexOf(effort) + Math.sign(bias)))
-  return EFFORTS[i]
-}
-
-/** Floor and ceiling from the settings: what Auto picks stays between them. */
-export function bounded(effort: Effort, floor: Effort, ceiling: Effort): Effort {
-  const lo = EFFORTS.indexOf(floor)
-  const hi = Math.max(lo, EFFORTS.indexOf(ceiling))
-  return EFFORTS[Math.max(lo, Math.min(hi, EFFORTS.indexOf(effort)))]
-}
-
-/** Save mode caps what Auto picks at medium; a higher pick comes down to it. */
-export function capped(effort: Effort, saving: boolean): Effort {
-  return saving && EFFORTS.indexOf(effort) > EFFORTS.indexOf('medium') ? 'medium' : effort
 }
 
 // A main-conversation turn is running: set when a prompt is sent and at each request, cleared when the turn ends (an
@@ -1624,104 +857,6 @@ async function compactCold($: EngineInterface, note = '') {
   }
 }
 
-// The handoff: one click writes a handoff, clears the chat and sends the handoff into it as the first message.
-// The quick handoff is written by a fork, which has no tools: it says what the chat last saw and marks what it cannot
-// check. The full handoff (the person's own skill) is the one that inspects git and saves files.
-export const HANDOFF_PROMPT = [
-  'Write a handoff so this work can continue in a fresh chat that has no other context.',
-  '',
-  'Start with the project, its folder and the branch. Then:',
-  '- Goal: one or two lines.',
-  '- Done: what changed, with file paths, and how each change was checked. Never present something planned, skipped or untested as done.',
-  '- Not done: what is half done, and the concrete blocker (a failed check, a missing approval, an open question).',
-  '- Git: local changes, local commits, pushed commits and open PRs, as last seen in this chat. You cannot check now, so say "as of last check".',
-  '- Next steps in priority order. Make the first one runnable: a file path, a command or a specific decision. Mark every step that needs the user with "needs user".',
-  '- To resume: the start command, the preview URL, and the limits on what is allowed (what needs the user\'s approval, test vs production).',
-  '- Do not redo: decisions made and why, approaches that failed.',
-  '',
-  'Give only the final state of anything that changed during the chat. Point to specs, plans and files instead of ' +
-    'copying them. Leave out what is finished and no longer matters. Never include secrets, environment values or raw ' +
-    'logs. Write in the language the user writes in. Short bullets, at most about 40 lines. Do not use tools. Reply ' +
-    'with the handoff only, no preamble or farewell.',
-].join('\n')
-
-/** The full handoff when no skill of the person's is picked: a turn that checks the real state, saves a detailed
- * HANDOFF.md and replies with all of it. Slower than the quick fork; detail over brevity, since the next chat has
- * nothing else. */
-export const HANDOFF_FULL_PROMPT = [
-  'Write a detailed handoff so this work can continue in a fresh chat that has no other context. Someone (or a fresh ' +
-    'agent) must be able to pick up exactly where this chat left off, with nothing lost. Detail and precision come ' +
-    'before brevity. Fit the detail to the kind of work (coding, research, configuration, writing), but cover every section.',
-  '',
-  'Write it yourself, in this chat. Never hand it to a subagent: a subagent starts empty and cannot rebuild this conversation.',
-  '',
-  '1. Check the real state with tools: git status, the last few commits, whether the branch is pushed, open PRs if gh is set up.',
-  '2. Save it as HANDOFF.md in the first of these folders that exists in the project: docs/internal/, docs/local/, ' +
-    'docs/. If none exists, save it in the project root. Never create a folder. Rewrite the file from scratch.',
-  '3. Reply with the whole handoff, its path on the first line, no preamble or farewell.',
-  '',
-  'Use Markdown with these headings, in this order. No XML tags.',
-  '',
-  '# Handoff: <project>, <branch>',
-  '## Original task',
-  'What was asked at the start, precise about scope. Not side tasks or scope added later.',
-  '## Work completed',
-  '- Files created, changed or read, with paths and line numbers; what changed in each.',
-  '- Commands run, APIs called, searches made, and what they showed.',
-  '- Findings: answers, data points, patterns.',
-  '- Decisions made, and why.',
-  '- How each change was checked. Never present something planned, skipped or untested as done.',
-  '## Work remaining',
-  '- Concrete steps in priority order, each with exact paths, URLs or commands. Make the first one runnable.',
-  '- Dependencies and the order they impose.',
-  '- How to verify each step.',
-  '- Mark every step that needs the user with "needs user".',
-  '## Attempted approaches',
-  '- What was tried and did not work, and why it failed.',
-  '- Errors, blockers and limits hit; dead ends not to repeat.',
-  '- Alternatives considered and not pursued.',
-  '## Critical context',
-  '- Constraints, requirements and limits on what is allowed (what needs the user\'s approval, test vs production).',
-  '- Gotchas, edge cases and non-obvious behaviour found.',
-  '- Environment, configuration and setup details; how to start or preview the work.',
-  '- Assumptions still to be checked.',
-  '- Docs, sources and references used.',
-  '## Current state',
-  '- Each deliverable: done, in progress or not started.',
-  '- Git as checked in step 1: local changes, local commits, pushed or not, open PRs.',
-  '- What is final and what is a draft, a temporary change or a workaround.',
-  '- Open questions and decisions waiting.',
-  '## Suggested skills',
-  'The skills or slash commands the next chat should use, and when. Write "None" if none fit.',
-  '',
-  'Point to specs, plans, commits, PRs and files instead of copying them. Redact secrets, keys, passwords, environment ' +
-    'values and personal information. Write in the language the user writes in.',
-].join('\n')
-
-/** A handoff prompt with the next session's focus, when the person gave one. */
-export function withFocus(prompt: string, focus = ''): string {
-  const f = focus.trim()
-  if (!f) return prompt
-  return `${prompt}\n\nThe next session is for: ${f}\nShape the handoff around that: what matters for it comes first, and the next steps start there.`
-}
-
-/** The first message of the fresh chat: the handoff, then what to do with it. */
-export function handoffMessage(handoff: string, after: HandoffAfter, skill?: string, focus = ''): string {
-  const ask =
-    after === 'confirm'
-      ? 'Read this, say in two lines where things stand and what is next, then wait for me.'
-      : 'Continue with the next step. If it is marked "needs user", say what you need and wait.'
-  const forWhat = focus.trim() ? `This session is for: ${focus.trim()}\n\n` : ''
-  // A full handoff is the person's own skill: it saves the handoff (a file, memories), and its last words in the chat
-  // are often only a note that it did. The new chat is told to read what the skill saved before anything else.
-  if (skill)
-    return (
-      `Handoff from the previous chat: it ran /${skill}, which saved the handoff. Its last words there:\n\n${handoff.trim()}\n\n` +
-      `${forWhat}First read the handoff /${skill} saved: the files named above, or HANDOFF.md in the project if none is named. ${ask}`
-    )
-  return `Handoff from the previous chat:\n\n${handoff.trim()}\n\n${forWhat}${ask}`
-}
-
 // The handoff's text once its turn has ended, waiting for the chat to go idle so it can be cleared and resent.
 let handoffText: string | undefined
 let handoffDriving = false
@@ -1769,19 +904,9 @@ async function openHandoffBar($: EngineInterface) {
   await update($, handoffPick, () => choice)
   $.ui.invalidate('ui.render')
 }
-
-/** The Enter mark as Claude's prompt box draws it: a return arrow, down the right side and back left. */
-export function enterSvg(color: string): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><g fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5V7.2A1.8 1.8 0 0 1 9.7 9H2.8"/><path d="M5.3 6.4 2.7 9l2.6 2.6"/></g></svg>`
-}
 /** The compact bar's Compact: a white pill like the app's primary buttons, GO_CELLS wide. */
 // The narrowest bar (in cells) that still has room for a Compact button beside Auto and Handoff.
 const COMPACT_BUTTON_MIN_COLUMNS = 80
-const GO_CELLS = 12
-const GO_W = Math.round(GO_CELLS * 7.9)
-function goPillSvg(): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${GO_W}" height="20" viewBox="0 0 ${GO_W} 20"><rect width="${GO_W}" height="20" rx="5" fill="#ffffff"/></svg>`
-}
 /** Compact pressed: on desktop a bar asks for an optional note first; the terminal compacts at once. */
 async function openCompact($: EngineInterface, e: { surface: string }) {
   if (e.surface === 'terminal') return compactCold($)
@@ -1800,41 +925,6 @@ async function goHandoff($: EngineInterface, choice: HandoffChoice) {
   await closeHandoffBar($)
   await startHandoff($, choice.kind === 'full', choice.after, handoffFocusDraft)
   handoffFocusDraft = ''
-}
-
-/** /effortless handoff's arguments: "full" first picks the full handoff; the rest is the focus, as typed. */
-export function handoffArgs(args: string): { full: boolean; focus: string } {
-  const rest = args.trim().replace(/^handoff\b/i, '').trim()
-  const full = /^full\b/i.test(rest)
-  return { full, focus: (full ? rest.replace(/^full\b/i, '') : rest).trim() }
-}
-
-/** What the handoff does, by the choice: who writes it, then what follows. */
-export function handoffWhat(choice: HandoffChoice, skill: string): { by: string; then: string } {
-  const by = choice.kind === 'full' ? (skill ? `/${skill}, slower` : 'Checks git, saves HANDOFF.md, slower') : 'Done in seconds'
-  const then =
-    choice.after === 'copy'
-      ? 'Copied, chat stays.'
-      : choice.after === 'confirm'
-          ? 'Clears chat, then waits.'
-          : 'Clears chat, carries on.'
-  return { by, then }
-}
-
-/** What a handoff fork came to, in a few words for /effortless debug: its reason when it wrote nothing. */
-export function forkOutcome(result: unknown, ms: number): string {
-  const took = `${(ms / 1000).toFixed(1)}s`
-  if (result instanceof Error) return `threw: ${result.message.slice(0, 120)} (${took})`
-  const r = result as ModelForkResult | undefined
-  if (!r || typeof r !== 'object' || !('isAnswered' in r)) return `threw: ${String(result).slice(0, 120)} (${took})`
-  if (r.isAnswered) {
-    const u = r.usage
-    const input = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
-    const cached = input ? Math.round((u.cache_read_input_tokens / input) * 100) : 0
-    return r.text.trim() ? `answered, ${u.output_tokens} out, ${cached}% cached (${took})` : `answered with blank text (${took})`
-  }
-  if (r.reason === 'api-error') return `api-error ${r.status ?? 'no response'} ${r.error} (${took})`
-  return `${r.reason} (${took})`
 }
 
 /** Writes the handoff: quick by a fork with the built-in prompt, full by the person's own skill as a turn. Runs from the timer. */
@@ -2009,7 +1099,7 @@ async function saveSetting($: EngineInterface, field: keyof typeof SETTING_FIELD
     [SETTING_FIELDS[field]]: value,
   }
   // The keys are the app's secrets: never in raw, kept as they were.
-  config = { ...readConfig(raw), typesafeKey: config.typesafeKey, openrouterKey: config.openrouterKey }
+  setConfig({ ...readConfig(raw), typesafeKey: config.typesafeKey, openrouterKey: config.openrouterKey })
   await resettle($)
   applyTheme()
   $.ui.invalidate('ui.render')
@@ -2049,19 +1139,6 @@ async function saveDraft($: EngineInterface) {
   $.ui.invalidate('ui.render')
   await $.store.set('setupSave', changes)
   await drainSetupSave($)
-}
-
-/** A TYPESAFE_API_KEY line set in an .env file's text: replaced where it is, added where it is not. */
-export function withTypesafeKey(text: string, key: string): string {
-  return withEnvLine(text, 'TYPESAFE_API_KEY', key)
-}
-
-/** A NAME=value line set in an .env file's text: replaced where it is, added where it is not. */
-export function withEnvLine(text: string, name: string, value: string): string {
-  const line = `${name}=${value}`
-  const at = new RegExp(`^\\s*${name}\\s*=.*$`, 'm')
-  if (at.test(text)) return text.replace(at, () => line)
-  return `${text}${text && !text.endsWith('\n') ? '\n' : ''}${line}\n`
 }
 
 /**
@@ -2126,58 +1203,10 @@ async function saveTypesafeKey($: EngineInterface, key: string): Promise<boolean
   return true
 }
 
-// Fork: decision is where a decision model runs (Zen, OpenRouter or TypeSafe); decision-openrouter and decision-typesafe take that key.
-export type SetupStep = 'pick' | 'decision' | 'decision-openrouter' | 'decision-typesafe' | 'lean' | 'handoff' | 'look' | 'done'
-
-/** The lean's five stops, cheaper to smarter: a name, and what it does to the judge's pick (see tipped). */
-export const LEAN_STOPS = [
-  ['Cheapest', 'more picks go lower'],
-  ['Cheaper', 'unsure picks go lower'],
-  ['Balanced', 'the judge decides'],
-  ['Smarter', 'unsure picks go higher'],
-  ['Smartest', 'more picks go higher'],
-] as const
-
-/** The guide's step after this one: the judge (with its key or URL), the lean, the handoff, then done. */
-export function setupNext(step: SetupStep): SetupStep | null {
-  if (step === 'pick' || step === 'decision' || step === 'decision-openrouter' || step === 'decision-typesafe') return 'lean'
-  if (step === 'lean') return 'handoff'
-  if (step === 'handoff') return 'look'
-  if (step === 'look') return 'done'
-  return null
-}
-
-/** The step Back goes to: the judge's key or URL goes back to the pick, as does the lean. */
-export function setupBack(step: SetupStep): SetupStep | null {
-  if (step === 'decision-openrouter' || step === 'decision-typesafe') return 'decision'
-  if (step === 'decision' || step === 'lean') return 'pick'
-  if (step === 'handoff') return 'lean'
-  if (step === 'look') return 'handoff'
-  if (step === 'done') return 'look'
-  return null
-}
-
-/** "2/3" for the step shown; the closing step has no number. */
-export function setupCounter(step: SetupStep): string {
-  const n = { pick: 1, decision: 1, 'decision-openrouter': 1, 'decision-typesafe': 1, lean: 2, handoff: 3, look: 4, done: 0 }[step]
-  return n ? `${n}/4` : ''
-}
-
 /** Shows a step of the guide; the handoff step needs the installed skills to pick from. */
 async function goSetup($: EngineInterface, step: SetupStep | null) {
   if (step === 'handoff') await loadInstalledSkills($)
   await update($, setupStep, () => step)
-}
-
-/** The guide's choices over the saved settings: what each step shows. */
-export function setupShown(draft: SettingsDraft, saved: JudgeConfig) {
-  return {
-    judge: (draft.judge ?? saved.judge) as JudgeConfig['judge'],
-    bias: draft.bias !== undefined ? Number(draft.bias) : saved.bias,
-    handoffSkill: draft.handoffSkill ?? saved.handoffSkill,
-    hide: (draft.hide ?? saved.hide.join(',')).split(',').filter(Boolean) as Hideable[],
-    appearance: (draft.appearance ?? saved.appearance) as JudgeConfig['appearance'],
-  }
 }
 
 /** Saves what the guide changed, only the fields that differ, then empties its draft. */
@@ -2242,18 +1271,13 @@ async function closeSetup($: EngineInterface) {
   await flushSetup($)
 }
 
-/** The decision model a TypeSafe key is used by: TypeSafe's Jev. */
-const TYPESAFE_ROUTE = 'typesafe/jev-latest'
-/** The draft's decision models (or the saved ones) with the TypeSafe route added. */
-const withTypesafeRoute = (raw?: string) => withRoute(raw ?? chainIds(config.decisionModels), TYPESAFE_ROUTE)
-
 /** The person picked a judge in the guide: Haiku alone, or a decision model (its key or the next step). Saved at the end. */
 async function pickJudge($: EngineInterface, choice: 'haiku' | 'decision') {
   // Auto either way: with no decision model listed, Auto is Haiku alone.
   await update($, setupDraft, d => ({ ...d, judge: 'auto' }))
   await markSetupDone($)
   if (choice === 'haiku') {
-    $.ui.toast('effortless: Haiku 5.5 judges, no key needed. Add a decision model later for faster answers.')
+    $.ui.toast('effortless: Haiku judges, no key needed. Add a decision model later for faster answers.')
     return goSetup($, 'lean')
   }
   if (await typesafeKey($)) {
@@ -2262,51 +1286,6 @@ async function pickJudge($: EngineInterface, choice: 'haiku' | 'decision') {
     return goSetup($, 'lean')
   }
   await goSetup($, choice)
-}
-
-/** 1234 -> "1.2k", 87 -> "87". */
-function tokens(n: number): string {
-  const v = Math.abs(n)
-  const text = v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v)
-  return n < 0 ? `-${text}` : text
-}
-
-const share = (part: number, whole: number) => `${Math.round((part / whole) * 100)} %`
-
-/**
- * What /effortless stats answers: what the prompts Auto steered cost, measured, split by kind and by effort,
- * and what the judge took. No "saved" figure: what a prompt would have cost at another effort is not known,
- * since effort mostly changes how many tool calls it makes. Cost is in tokens weighted as priced (WEIGHT).
- */
-export function savedText(raw: Spent): string {
-  const t = asSpent(raw)
-  const judged = t.judge.decision + t.judge.haikuUnsure + t.judge.haikuNoAnswer + t.judge.haikuOnly
-  const helperRuns = EFFORTS.reduce((n, e) => n + (t.helpers.runs[e] ?? 0), 0)
-  if (t.prompts === 0 && judged === 0 && helperRuns === 0) return 'nothing measured yet'
-  const input = t.input * WEIGHT.input
-  const write = t.write * WEIGHT.write
-  const cached = t.read * WEIGHT.read
-  const out = t.out * WEIGHT.out
-  const total = input + write + cached + out
-  const lines = [
-    `${t.prompts} prompts, ${t.requests} requests, cost about ${tokens(Math.round(total))} tokens weighted by price` +
-      (total > 0 ? ` (cache reads ${share(cached, total)}, cache writes ${share(write, total)}, output ${share(out, total)})` : ''),
-  ]
-  const per = EFFORTS.filter(e => t.byEffort[e]?.prompts).map(e => {
-    const b = t.byEffort[e]!
-    return `${EFFORT_LABELS[e]} ${b.prompts}, average ${tokens(Math.round(b.cost / b.prompts))}`
-  })
-  if (per.length) lines.push(`Per prompt: ${per.join('; ')}`)
-  if (helperRuns) {
-    const per = EFFORTS.filter(e => t.helpers.runs[e]).map(e => `${EFFORT_LABELS[e]} ${t.helpers.runs[e]}`)
-    lines.push(`Helpers: ${helperRuns} subagent${helperRuns === 1 ? '' : 's'} (${per.join(', ')}), ${t.helpers.requests} requests, cost about ${tokens(Math.round(t.helpers.cost))} tokens`)
-  }
-  if (judged) {
-    lines.push(
-      `Judge: decision models ${t.judge.decision}, Haiku after unsure ${t.judge.haikuUnsure}, after no answer ${t.judge.haikuNoAnswer}, Haiku only ${t.judge.haikuOnly}, average ${Math.round(t.judge.ms / judged)} ms, ${tokens(t.judge.tokens)} tokens in all`,
-    )
-  }
-  return lines.join('\n')
 }
 
 /** You picked an effort (terminal rows): Auto for effort goes off and the requests follow; Enter on /effort moves the app. */
@@ -2357,64 +1336,6 @@ async function choose($: EngineInterface, next: Pick | null) {
 /** Everything a redraw needs, read together: the reads go out at once instead of one after the other. */
 // The context figures from the last usage check, for the cache tooltip.
 let lastContext: { tokens: number; window: number; percent: number } | null = null
-
-/** A small ring filled to `percent`, for the context in the swamp band. */
-export function ringSvg(percent: number, color: string): string {
-  const p = Math.max(0, Math.min(100, percent))
-  const c = 2 * Math.PI * 6
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="${color}" stroke-opacity=".25" stroke-width="2.2"/><circle cx="8" cy="8" r="6" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="${((c * p) / 100).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 8 8)"/></svg>`
-}
-
-/** The dashboard's settings icon: an outlined cog of eight teeth, drawn rather than a glyph, since the gear character
- * is a different shape in every font. */
-export function settingsSvg(color: string): string {
-  const step = (2 * Math.PI) / 8
-  const pts: string[] = []
-  for (let i = 0; i < 8; i++) {
-    const a = i * step
-    const at = (f: number, r: number) => `${(7 + r * Math.cos(a + f * step)).toFixed(2)},${(7 + r * Math.sin(a + f * step)).toFixed(2)}`
-    pts.push(at(-0.42, 4.6), at(-0.27, 4.6), at(-0.2, 6.1), at(0.2, 6.1), at(0.27, 4.6), at(0.42, 4.6))
-  }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><g fill="none" stroke="${color}" stroke-width="1.3" stroke-linejoin="round" shape-rendering="geometricPrecision"><path d="M${pts.join('L')}Z"/><circle cx="7" cy="7" r="2"/></g></svg>`
-}
-
-/** The settings rows' icons, drawn in the cog's outline style (14 px, 1.3 stroke) rather than font glyphs, which
- * differ per font. */
-export function rowIconSvg(kind: 'effort' | 'judge' | 'handoff' | 'show' | 'quick' | 'full', color: string, onKnobToo = false): string {
-  const shapes = {
-    // A gauge: an open arc with a needle.
-    effort: '<path d="M2.6 10.4A5 5 0 1 1 11.4 10.4"/><path d="M7 8.2L9.6 5.2"/><circle cx="7" cy="8.6" r=".9"/>',
-    // Scales: a beam on a post, two pans.
-    judge: '<path d="M7 2.4V11.6M4.4 11.6H9.6M2.6 4.2H11.4"/><path d="M2.6 4.2L1.2 7.6A1.5 1.5 0 0 0 4 7.6Z"/><path d="M11.4 4.2L10 7.6A1.5 1.5 0 0 0 12.8 7.6Z"/>',
-    // An arrow into a bar: hand off.
-    handoff: '<path d="M1.8 7H9.4M6.6 4.2L9.4 7L6.6 9.8"/><path d="M11.8 2.6V11.4"/>',
-    // A pencil: customize. The tip down left, a line across the ferrule.
-    show: '<path d="M9.6 2.1 11.9 4.4 4.9 11.4 2.1 11.9 2.6 9.1Z"/><path d="M8.1 3.6 10.4 5.9"/>',
-    // Quick and Full are drawn solid below: an outline at 14 px was too thin to read.
-    quick: '',
-    full: '',
-  }[kind]
-  if (kind === 'quick' || kind === 'full') {
-    const solid = kind === 'quick'
-      // A bolt: the quick handoff, done in seconds.
-      ? 'M8.6 1 2.8 8.2H6.6L5.4 13 11.2 5.8H7.4Z'
-      // A pen: the full handoff, written out by your skill.
-      : 'M10.2 1.5 12.5 3.8 5.3 11 2.3 11.7 3 8.7ZM9 2.7 11.3 5'
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><path${onKnobToo ? ' data-keep="1"' : ''} d="${solid}" fill="${color}" stroke="${color}" stroke-width="0.6" stroke-linejoin="round"/></svg>`
-  }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><g fill="none" stroke="${color}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision">${shapes}</g></svg>`
-}
-
-/** A band's entrance: a soft violet wash that fades and a light sweep passing left to right, once, as the band
- * appears. The app has no transitions for a band (its tree is swapped at once), but a plain Svg's CSS animation starts
- * when the image is first drawn and is not restarted by a redraw with the same source. Stretched to the band
- * (preserveAspectRatio none: the app scales a Svg down to its box's width but keeps its height), behind the content. */
-export const INTRO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="240" viewBox="0 0 1600 240" preserveAspectRatio="none"><style>.w{opacity:0;animation:w .7s ease-out}.s{opacity:0;animation:s 1.1s cubic-bezier(.2,.7,.2,1)}@keyframes w{from{opacity:.16}to{opacity:0}}@keyframes s{from{transform:translateX(-520px);opacity:1}80%{opacity:1}to{transform:translateX(1700px);opacity:0}}</style><defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".55" stop-color="#b9a7ff" stop-opacity=".16"/><stop offset=".7" stop-color="#fff" stop-opacity=".1"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs><rect class="w" width="1600" height="240" fill="#8b6cff"/><rect class="s" width="480" height="240" fill="url(#g)"/></svg>`
-
-/** k/M for token counts: 420000 -> "420k", 1000000 -> "1.0M". */
-function kTokens(n: number): string {
-  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}k`
-}
 
 async function snap($: EngineInterface) {
   const [auto, current, judging, shownByApp, modelNow, switchedNow, pausedNow, cacheNow, compacting] = await Promise.all([
@@ -2473,20 +1394,7 @@ let probeLevel = 0
 let renderCalls = 0
 let lastRenderProps = ''
 let lastRenderBranch = ''
-// Every time the app asked for the band, with what it sent, written to ~/.claude/effortless-render-<chat>.log each second
-// (the last 300): how often the band is really redrawn in the app, which the render rig cannot see (hover flicker).
-const renderLog: string[] = []
-let renderLogWritten = 0
-async function writeRenderLog($: EngineInterface) {
-  if (renderLog.length === renderLogWritten) return
-  if (renderLog.length > 600) renderLog.splice(0, renderLog.length - 300)
-  renderLogWritten = renderLog.length
-  const home = (await envUserProfile($)) ?? (await envHome($))
-  // One file per chat: a shared file was overwritten whole by whichever chat drew last.
-  if (home) await $.fs.write(`${home}/.claude/effortless-render-${loadedSession}.log`, renderLog.slice(-300).join('\n') + '\n').catch(() => undefined)
-}
 let lastRenderAt = 0
-let loadedSession = '-'
 // When this module loaded, for the render log's "first draw" line.
 let loadedAt = Date.now()
 let firstDrawLogged = false
@@ -2600,67 +1508,6 @@ async function terminalBand($: EngineInterface, e: RenderInput<'AbovePrompt'>, b
     </Box>
   )
 }
-
-/** The dashboard's two lines: the effort with the cache and the context, then the judge's reason and the last reply. */
-export function dashboardLines(d: {
-  auto: boolean
-  paused: boolean
-  judging: boolean
-  effort: Effort | undefined
-  cacheNow: number | null
-  contextPercent: number | null
-  reason: string
-  last: { cost: number; ms: number } | null
-  /** The person picked this level by hand: it runs whether Auto is on or off. */
-  manual?: boolean
-  /** The judge was unsure, so the level in force was kept from the last prompt. */
-  kept?: boolean
-}): { head: string; what: string; rest: string; detail: string } {
-  const level = d.effort ? EFFORT_LABELS[d.effort] : 'Auto'
-  // Auto on or off is the button's to say (and the terminal's effort row's), not the text's. A kept level says so in
-  // the word: otherwise it reads as a verdict that never came.
-  const what = d.judging
-    ? 'Deciding…'
-    : d.manual && d.effort
-      ? `${level} · manual`
-      : !d.auto
-        ? 'Off'
-        : d.kept
-          ? `${level} · kept`
-          : d.paused
-            ? `${level} · Auto paused`
-            : level
-  const head = [
-    `✦ ${what}`,
-    d.cacheNow === null ? null : `cache ${cacheLabel(d.cacheNow)}`,
-    d.contextPercent === null ? null : `${Math.round(d.contextPercent)}% context`,
-  ]
-  const last = d.last ? `last reply ≈${tokens(Math.round(d.last.cost))} tokens · ${Math.max(1, Math.round(d.last.ms / 1000))}s` : null
-  const shown = head.filter(Boolean) as string[]
-  return {
-    head: shown.join(' · '),
-    what,
-    rest: shown.slice(1).map(part => ` · ${part}`).join(''),
-    detail: [d.reason, last].filter(Boolean).join(' · '),
-  }
-}
-
-/** How long the effort word glows after it changes: held at full colour, then faded out; and the step of the fade. */
-const FLASH_HOLD_MS = 1000
-const FLASH_MS = 1800
-/** The fade's steps, [ms, share of the way to white]: five, so it reads as a fade without a tick. Each step is a redraw,
- * and every redraw rebuilds the band (images restart, buttons under a pointer are swapped), so keep them few. */
-const FLASH_STEPS: readonly (readonly [number, number])[] = [[1000, 0.15], [1160, 0.35], [1320, 0.55], [1480, 0.75], [1640, 0.9]]
-/** The glow: a stronger violet than the accent, so a switch is seen at a glance. */
-let FLASH_COLOR = '#9b7bff'
-/** The effort word's colour `ms` after it changed: the glow, held, then easing out to the band's white. */
-export function flashColor(ms: number | null): string {
-  if (ms === null || ms >= FLASH_MS) return DASH_TEXT
-  if (ms < FLASH_HOLD_MS) return FLASH_COLOR
-  const k = [...FLASH_STEPS].reverse().find(([at]) => ms >= at)?.[1] ?? 0
-  const ch = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16)
-  return `#${[0, 1, 2].map(i => Math.round(ch(FLASH_COLOR, i) + (ch(DASH_TEXT, i) - ch(FLASH_COLOR, i)) * k).toString(16).padStart(2, '0')).join('')}`
-}
 // The word the dashboard last showed and when it last changed, so a new effort glows and fades. Not while the judge
 // decides: the word it lands on is compared with the one before.
 let flashWord: string | null = null
@@ -2695,10 +1542,6 @@ const UNINSTALL_ARM_MS = 4000
 let uninstallArmedAt = 0
 let uninstalling = false
 const UNINSTALL_RED = '#ff6b6b'
-/** A bin: the lid and its handle, the can with two ribs. */
-function binSvg(color: string): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><g fill="none" stroke="${color}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.2 3.8H11.8M5.4 3.8V2.4H8.6V3.8M3.4 3.8L4 12H10L10.6 3.8M5.9 6V9.8M8.1 6V9.8"/></g></svg>`
-}
 /** The fork's repo: bug reports go here (the fork has no site of its own). */
 const REPO_URL = 'https://github.com/capyBearista/effortless'
 function uninstallButton($: EngineInterface, els: ReturnType<EngineInterface['ui']['resolve']>) {
@@ -2863,41 +1706,7 @@ async function afterLoad($: EngineInterface) {
   ownVersion = (await installedVersion($)) ?? ownVersion
   startTimers($, 'draw')
 }
-/**
- * Where `claude` may be: on PATH, then where the official installers put it. The desktop app starts with the PATH it
- * had at login, so a CLI installed since is not on it until the next sign-in.
- */
-export function claudeCandidates(home: string | undefined): string[] {
-  if (!home) return ['claude']
-  const win = /^[A-Za-z]:/.test(home)
-  const sep = home.includes('\\') ? '\\' : '/'
-  return ['claude', [home.replace(/[\\/]+$/, ''), '.local', 'bin', win ? 'claude.exe' : 'claude'].join(sep)]
-}
-// What the engine says when a command cannot be started at all, as opposed to one that ran and failed.
-const NOT_STARTED = /ENOENT|not found or is in an unsafe location|failed to start/i
-/** For a `claude` that would not start: what to install, in the person's own shell; undefined for any other error. */
-export function noClaudeHint(error: string, home: string | undefined): string | undefined {
-  if (!NOT_STARTED.test(error)) return undefined
-  const install = home && /^[A-Za-z]:/.test(home) ? 'irm https://claude.ai/install.ps1 | iex' : 'curl -fsSL https://claude.ai/install.sh | bash'
-  return `This needs the Claude Code CLI. Install it with ${install}, then reopen the app.`
-}
-const homeDir = async ($: EngineInterface) => ((await envUserProfile($)) ?? (await envHome($))) || undefined
-/** `claude <args>`, from the next place it may be when one will not start. */
-async function runClaude($: EngineInterface, args: string[], opts: Parameters<EngineInterface['process']['run']>[1]) {
-  let last: unknown
-  for (const bin of claudeCandidates(await homeDir($))) {
-    try {
-      return await $.process.run([bin, ...args], opts)
-    } catch (error) {
-      last = error
-      if (!NOT_STARTED.test(String(error))) throw error
-    }
-  }
-  throw last
-}
-/** A plain /reload-plugins holds back a change that would make the next message re-read the chat without the cache
- * (new commands do), says "installed but not applied" and keeps the old code running. Uninstall was pressed: apply it. */
-export const RELOAD_ARGS = '--force'
+
 /** How long "Compact complete" stays above the prompt when nothing else clears it. */
 const COMPACT_CARD_MS = 20_000
 /** A settings part's body on desktop is as tall as the overview's row of cards, so the panel keeps its height going in
@@ -2919,8 +1728,6 @@ async function compactCard($: EngineInterface, working = false) {
 /** The glow behind the white Handoff button. Check a change on tools/render-band before shipping: an earlier glow looked
  * tight in a preview but far bigger and blurrier in the app. */
 const HANDOFF_GLOW = true
-/** Context share from which the dashboard's Handoff button turns white: below it a handoff saves little. */
-const HANDOFF_LOUD_AT = 30
 // Handoff is calm until Haiku says a fresh chat would suit now (handoffAdvice); then it is the white box with a glow.
 // What the band last read from handoffAdvice, so the drawing helpers need no await.
 let adviceNow: string | null = null
@@ -2929,75 +1736,6 @@ const HANDOFF_ADVICE_LEVEL = 50
 const handoffLevel = () => (adviceNow ? HANDOFF_ADVICE_LEVEL : config.handoffButton === 'always' ? HANDOFF_BOX_AT : 0)
 const handoffLoud = () => adviceNow !== null
 const handoffSlot = () => handoffLoud() || config.handoffButton === 'always'
-/** Handoff's box: it fades in, grey, up to HANDOFF_BOX_AT, then lightens to white by HANDOFF_LOUD_AT, where the glow
- * takes over (it grows to 80%). A glow only ever sits around the white box. */
-const HANDOFF_BOX_AT = 15
-const HANDOFF_PILL_W = 66
-const HANDOFF_PILL_H = 19
-/** Handoff's look at `percent` of context, a step each percent: no box at 0, the grey box by HANDOFF_BOX_AT, white by
- * HANDOFF_LOUD_AT. The label goes from dim to white, and dark once the box is light enough to need it. */
-export function handoffLook(percent: number, hovered = false): { fill: string; opacity: number; edge: string; label: string } {
-  // Hovered, the box is there even on a fresh chat and a few steps lighter.
-  const p = Math.max(hovered ? HANDOFF_BOX_AT : 0, Math.min(HANDOFF_LOUD_AT, Math.round(percent) + (hovered ? 5 : 0)))
-  const mix = (a: string, b: string, k: number) => {
-    const ch = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16)
-    return `#${[0, 1, 2].map(i => Math.round(ch(a, i) + (ch(b, i) - ch(a, i)) * k).toString(16).padStart(2, '0')).join('')}`
-  }
-  if (p <= HANDOFF_BOX_AT) {
-    const k = p / HANDOFF_BOX_AT
-    return { fill: HOVER_BOX, opacity: k, edge: mix(DASH_BG, '#3a3a40', k), label: mix(DASH_DIM, '#ececf0', k) }
-  }
-  const k = (p - HANDOFF_BOX_AT) / (HANDOFF_LOUD_AT - HANDOFF_BOX_AT)
-  return { fill: mix(HOVER_BOX, '#ececf0', k), opacity: 1, edge: mix('#3a3a40', '#ffffff', k), label: k > 0.45 ? '#141416' : '#ececf0' }
-}
-/** Handoff's box as drawn (see handoffLook). */
-export function handoffPillSvg(percent: number, hovered = false): string {
-  const l = handoffLook(percent, hovered)
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${HANDOFF_PILL_W}" height="${HANDOFF_PILL_H}" viewBox="0 0 ${HANDOFF_PILL_W} ${HANDOFF_PILL_H}"><rect x=".5" y=".5" width="${HANDOFF_PILL_W - 1}" height="${HANDOFF_PILL_H - 1}" rx="6" fill="${l.fill}" fill-opacity="${l.opacity.toFixed(3)}" stroke="${l.edge}" stroke-opacity="${l.opacity.toFixed(3)}"/></svg>`
-}
-/** How hard the glow behind Handoff pulls: 0 below HANDOFF_LOUD_AT, then 1 to 5, one step per 10% of context. */
-export function handoffGlowStep(percent: number): number {
-  return percent < HANDOFF_LOUD_AT ? 0 : Math.min(5, 1 + Math.floor((percent - HANDOFF_LOUD_AT) / 10))
-}
-/** The glow behind the Handoff button, one design per step, drawn on a screenshot of the real bar: a tight violet rim
- * just past the button (about 121 by 32 px there), wider, softer and brighter each step, pulsing between a low and a
- * peak. Centred on the button by the layer the dashboard puts it in. */
-const GLOW_LEVELS: ReadonlyArray<{ spread: number; blur: number; peak: number; low: number; period: number }> = [
-  { spread: 0, blur: 0, peak: 0, low: 0, period: 0 },
-  { spread: 1.5, blur: 1.2, peak: 0.55, low: 0.2, period: 3.4 },
-  { spread: 2, blur: 1.5, peak: 0.65, low: 0.25, period: 2.8 },
-  { spread: 2.5, blur: 1.8, peak: 0.75, low: 0.3, period: 2.3 },
-  { spread: 3, blur: 2.1, peak: 0.85, low: 0.35, period: 1.9 },
-  { spread: 3.5, blur: 2.4, peak: 0.95, low: 0.4, period: 1.5 },
-]
-/** The glow's drawing in CSS px, measured on a faithful render of the desktop band (tools/render-band): the primary
- * Handoff button is 77 by 20 with a 6 px radius, and the band leaves 8 px above and below it. The drawing is no wider
- * than the layer it sits in, so the app never scales it (a Svg is at most as wide as its box). */
-const GLOW_W = HANDOFF_PILL_W + 16
-const GLOW_H = HANDOFF_PILL_H + 16
-const GLOW_BUTTON = { w: HANDOFF_PILL_W, h: HANDOFF_PILL_H, r: 6 }
-export function handoffGlowSvg(step: number, nowMs = 0): string {
-  const { spread: e, blur, peak, low, period } = GLOW_LEVELS[step]
-  // The pulse's place from the clock, so a redraw does not restart it from the low point.
-  const lock = (svg: string) => inPhase(svg, nowMs % (period * 1000))
-  const x = (GLOW_W - GLOW_BUTTON.w) / 2 - e
-  const y = (GLOW_H - GLOW_BUTTON.h) / 2 - e
-  return lock(`<svg xmlns="http://www.w3.org/2000/svg" width="${GLOW_W}" height="${GLOW_H}" viewBox="0 0 ${GLOW_W} ${GLOW_H}"><style>.g{animation:p ${period}s ease-in-out infinite}@keyframes p{0%,100%{opacity:${low}}50%{opacity:${peak}}}</style><defs><filter id="b" x="-30%" y="-80%" width="160%" height="260%"><feGaussianBlur stdDeviation="${blur}"/></filter></defs><g class="g" filter="url(#b)"><rect x="${x}" y="${y}" width="${GLOW_BUTTON.w + 2 * e}" height="${GLOW_BUTTON.h + 2 * e}" rx="${GLOW_BUTTON.r + e}" fill="${ACCENT}"/></g></svg>`)
-}
-
-/** How long the switch's knob takes to slide after a click. */
-const AUTO_SLIDE_MS = 260
-/** Auto as a switch: a pill with its knob right and violet when on, left and grey when off. `slide` draws the move from
- * the other side, for the redraw right after a click only (every redraw replays an image's animation). */
-export function autoSwitchSvg(on: boolean, slideMs: number | null = null): string {
-  const slide = slideMs !== null && slideMs < AUTO_SLIDE_MS
-  const t = `${AUTO_SLIDE_MS / 1000}s cubic-bezier(.3,.7,.2,1)`
-  const css = slide
-    ? `<style>.k{animation:k ${t}}.p{animation:p ${t}}@keyframes k{from{transform:translateX(${on ? -11 : 11}px);fill:${on ? '#8b8b93' : '#ffffff'}}}@keyframes p{from{fill:${on ? '#2c2c31' : ACCENT};stroke:${on ? '#4a4a52' : ACCENT}}}</style>`
-    : ''
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="15" viewBox="0 0 26 15">${css}<rect class="p" x=".5" y=".5" width="25" height="14" rx="7" fill="${on ? ACCENT : '#2c2c31'}" stroke="${on ? ACCENT : '#4a4a52'}"/><circle class="k" data-keep="1" cx="${on ? 18.5 : 7.5}" cy="7.5" r="5" fill="${on ? '#ffffff' : '#8b8b93'}"/></svg>`
-  return slide ? inPhase(svg, slideMs) : svg
-}
 /** The handoff bar's Quick | Full switch: a dark track with both words in it and a light knob under the picked one,
  * as tall as Go (20 px, 5 px radius, measured on tools/render-band) so the row's controls line up,
  * KIND_CELLS wide each half (the words are app Text laid over it; an image would draw them in another font). */
@@ -3028,78 +1766,9 @@ const KIND_SLIDE_DELAY_MS = 70
 // When the handoff bar's Quick | Full last changed, for the knob's slide. Stamped into the slide's image too: going
 // back and forth drew the same image twice, and the app reused it without playing the slide again.
 let kindFlipAt = 0
-/** How long the bar's edges glow after Auto is switched on. */
-const AUTO_GLOW_MS = 2600
-const AUTO_GLOW_W = 1100
-const AUTO_GLOW_H = 37
-/** The image starts inside the band's side borders but over its top and bottom ones (the layer's top and bottom are the
- * band's outer edge, its sides the inner), so the line is inset 0.75 px at the sides and 1.75 px at top and bottom: 1 px
- * inside the border all round.
- * The glow inside the bar's edges as Auto comes on: a violet light that rises along the rim, holds, and fades once. Drawn
- * for AUTO_GLOW_MS only (every redraw would replay it). Stretched across the band's width (preserveAspectRatio none: the
- * app scales a Svg to its box's width and keeps its height); drawn at about the band's real width so the sides stay
- * as thick as the top and bottom. Clipped to the bar's inside, so the light falls inward. */
-/** The cold band's rim: the Auto glow's light in ice, breathing slowly for as long as the band shows, so a cold chat
- * looks alive rather than parked. Placed by the clock (inPhase), so a redraw picks up where the breath was. */
-const COLD_GLOW_MS = 4200
 /** This install's id: effortless@capybearista for this fork. Read off the
  * cache path (…/plugins/cache/<marketplace>/effortless/<version>). */
 const pluginId = ($: EngineInterface) => `effortless@${$.plugin.root.match(/cache[\\/]([^\\/]+)[\\/]/)?.[1] ?? 'effortless'}`
-
-/** The rim in the brand's violet while the judge decides: it lights up and stays at full while it thinks, then fades from
- * full once the verdict is in. Two images, each placed by the clock on every draw (inPhase): the app swaps the whole
- * band on every redraw and a new image starts its animation over, so nothing here may depend on an image surviving.
- * The rise ends at full and holds there (forwards); the fade starts at full. The fade waits for the rise to finish, so
- * a quick verdict never fades from half-way. */
-export const JUDGE_RISE_MS = 500
-export const JUDGE_FADE_MS = 450
-const JUDGE_GLOW_MAX = 0.85
-/** CSS's ease-in-out, cubic-bezier(.42,0,.58,1): the progress at time t (0 to 1), by bisection on the curve's x. */
-export function easeInOut(t: number): number {
-  const at = (a: number, b: number, u: number) => 3 * (1 - u) * (1 - u) * u * a + 3 * (1 - u) * u * u * b + u * u * u
-  let lo = 0, hi = 1
-  for (let i = 0; i < 30; i++) {
-    const mid = (lo + hi) / 2
-    if (at(0.42, 0.58, mid) < t) lo = mid
-    else hi = mid
-  }
-  return at(0, 1, (lo + hi) / 2)
-}
-/** The rim's brightness `elapsedMs` into its rise or fade, read off the same curve the browser draws. */
-export function judgeBrightnessAt(kind: 'rise' | 'fade', elapsedMs: number): number {
-  const p = Math.min(1, Math.max(0, elapsedMs / (kind === 'rise' ? JUDGE_RISE_MS : JUDGE_FADE_MS)))
-  return kind === 'rise' ? JUDGE_GLOW_MAX * easeInOut(p) : JUDGE_GLOW_MAX * (1 - easeInOut(p))
-}
-/** The rim as one short piece: from its brightness now to its brightness JUDGE_STEP_MS later, in a straight line, then held.
- * The app draws old copies of the band again at moments the mod does not see (measured on a screen recording: a copy
- * from 130 ms into a fade came back 570 ms in, and the fade started over from full). A long animation replayed from a
- * stale copy jumps far; a piece this short is wrong for at most one step, and the schedule draws the next one. The rim
- * at full is a still image with no animation, so a replay changes nothing. */
-export const JUDGE_STEP_MS = 50
-/** How far each piece runs: longer than the gap between the app's redraws (measured 100 to 120 ms, however often the mod
- * asks), so a piece never ends and stands still before the next one is drawn. A piece of 50 ms did, in visible steps. */
-export const JUDGE_PIECE_MS = 150
-export function judgeGlowSvg(kind: 'rise' | 'fade', elapsedMs = 0): string {
-  const W = AUTO_GLOW_W, H = AUTO_GLOW_H
-  const dur = kind === 'rise' ? JUDGE_RISE_MS : JUDGE_FADE_MS
-  const from = judgeBrightnessAt(kind, elapsedMs)
-  // Five points along the true curve, so the piece is where the curve is at every moment and the next one starts on it.
-  const span = Math.max(1, Math.min(JUDGE_PIECE_MS, dur - elapsedMs))
-  const points = [0, 0.25, 0.5, 0.75, 1].map(k => `${(k * 100).toFixed(0)}%{opacity:${judgeBrightnessAt(kind, elapsedMs + k * span).toFixed(3)}}`).join('')
-  const still = kind === 'rise' && elapsedMs >= dur
-  const css = still
-    ? `.r{opacity:${JUDGE_GLOW_MAX}}`
-    : `.r{opacity:${from.toFixed(3)};animation:r ${(span / 1000).toFixed(3)}s linear forwards}@keyframes r{${points}}`
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><style>${css}</style><defs><filter id="b" x="-10%" y="-60%" width="120%" height="220%"><feGaussianBlur stdDeviation="1.5"/></filter></defs><g class="r"><rect x="0" y="0" width="${W}" height="${H}" rx="8" fill="none" stroke="${ACCENT}" stroke-width="4" opacity=".16" filter="url(#b)"/><rect x=".75" y="1.75" width="${W - 1.5}" height="${H - 3.5}" rx="8.25" fill="none" stroke="#b9a7ff" stroke-width="1.5" vector-effect="non-scaling-stroke"/></g></svg>`
-}
-/** What the glow is at `now`: nothing, rising or holding, or fading. `endedAt` is null while the judge decides. */
-export function judgeGlowAt(startedAt: number, endedAt: number | null, now: number): string | null {
-  if (now < startedAt) return null
-  const fadeFrom = endedAt === null ? Infinity : Math.max(endedAt, startedAt + JUDGE_RISE_MS)
-  if (now < fadeFrom) return judgeGlowSvg('rise', now - startedAt)
-  if (now < fadeFrom + JUDGE_FADE_MS) return judgeGlowSvg('fade', now - fadeFrom)
-  return null
-}
 /** Redraws the band every JUDGE_STEP_MS from `from` ms over `span` ms, so each piece of the rise or fade is drawn in turn. */
 function drawGlowSteps($: EngineInterface, from: number, span: number) {
   for (let at = Math.max(0, from); at <= from + span + JUDGE_STEP_MS; at += JUDGE_STEP_MS) $.clock.after(at + 5, () => $.ui.invalidate('ui.render'))
@@ -3121,17 +1790,6 @@ async function endJudgeGlow($: EngineInterface, why: string) {
   renderLog.push(`${new Date().toISOString()} ${loadedSession} glow: ${why} ${judgeEndedAt - judgeStartedAt} ms after start, fade in ${fadeAt} ms`)
   drawGlowSteps($, fadeAt, JUDGE_FADE_MS)
   $.ui.invalidate('ui.render')
-}
-
-export function coldGlowSvg(): string {
-  const W = AUTO_GLOW_W, H = AUTO_GLOW_H
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><style>.r{opacity:.15;animation:r ${COLD_GLOW_MS / 1000}s ease-in-out infinite}@keyframes r{0%,100%{opacity:.15}50%{opacity:.6}}</style><defs><filter id="b" x="-10%" y="-60%" width="120%" height="220%"><feGaussianBlur stdDeviation="1.5"/></filter></defs><g class="r"><rect x="0" y="0" width="${W}" height="${H}" rx="8" fill="none" stroke="${ICE}" stroke-width="4" opacity=".16" filter="url(#b)"/><rect x=".75" y="1.75" width="${W - 1.5}" height="${H - 3.5}" rx="8.25" fill="none" stroke="#cfeeff" stroke-width="1.5" vector-effect="non-scaling-stroke"/></g></svg>`
-}
-export function autoGlowSvg(on: boolean): string {
-  const W = AUTO_GLOW_W, H = AUTO_GLOW_H
-  const rim = `x="0" y="0" width="${W}" height="${H}" rx="8"`
-  const [wash, line, strength] = on ? [ACCENT, '#b9a7ff', 0.9] : ['#8b8b93', '#c8c8d0', 0.6]
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><style>.r{opacity:0;animation:r ${AUTO_GLOW_MS / 1000}s ease-in-out}@keyframes r{0%{opacity:0}15%{opacity:${strength}}45%{opacity:${(strength * 0.85).toFixed(2)}}100%{opacity:0}}</style><defs><filter id="b" x="-10%" y="-60%" width="120%" height="220%"><feGaussianBlur stdDeviation="1.5"/></filter><filter id="s" x="-10%" y="-60%" width="120%" height="220%"><feGaussianBlur stdDeviation=".8"/></filter></defs><g class="r"><rect ${rim} fill="none" stroke="${wash}" stroke-width="4" opacity=".14" filter="url(#b)"/><rect x=".75" y="1.75" width="${W - 1.5}" height="${H - 3.5}" rx="8.25" fill="none" stroke="${line}" stroke-width="1.5" vector-effect="non-scaling-stroke"/></g></svg>`
 }
 // When the bar last saw Auto off or on, when Auto came on (for the edge glow), and when it last changed (for the slide).
 let autoSeen: boolean | undefined
@@ -3326,7 +1984,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
             <Text key="dash-model" color={DASH_DIM}>{` · ${MODELS.find(m => m.key === v.modelNow)!.label}`}</Text>
           ) : null}
           {levelButtons}
-          {/* While the judge decides: the progress bar's thinking dots, as a plain image (its CSS still runs, and a
+          {/* While the judge decides: the thinking dots (drawn by progress.tsx), as a plain image (its CSS still runs, and a
               redraw does not restart it the way an interactive frame does). */}
           {v.judging && Svg ? (
             <Box key="dash-thinking" flexShrink={0} marginLeft={1} alignItems="center">
@@ -3495,20 +2153,6 @@ async function agentCost($: EngineInterface, id: string, cost: number) {
 const helperPicks = new Map<string, Verdict>()
 let helperWaiting: { description: string; type: string; parentId?: string; verdict: Verdict }[] = []
 
-/** What the judge reads for a subagent: its task, said to be one, so it judges the subagent's work. */
-export function helperQuestion(prompt: string, type: string): string {
-  return `${prompt.slice(0, 4000)}
-
-[This is the task Claude gave a ${type} subagent, not a message from the person. Judge the effort that subagent needs to do it well.]`
-}
-
-/** The lowest effort a helper gets: medium, or the person's Min when higher, never above their Max. A helper's answer
- * goes back to the chat unchecked, and at low it miscounted where medium did not (bench/results/helpers-2026-10-10.md). */
-export function helperFloor(floor: Effort, ceiling: Effort): Effort {
-  const i = Math.min(Math.max(EFFORTS.indexOf(floor), EFFORTS.indexOf('medium')), EFFORTS.indexOf(ceiling))
-  return EFFORTS[i]
-}
-
 /** The judge's verdict on a subagent's task, or null. Its model is not known yet, so no answer is checked here. */
 async function helperEffort($: EngineInterface, prompt: string, type: string): Promise<Verdict | null> {
   return (await judge($, helperQuestion(prompt, type), null)).verdict ?? null
@@ -3567,93 +2211,11 @@ async function agentWaits($: EngineInterface) {
   if (next) await update($, agentsState, () => next)
 }
 
-// A compaction written by Haiku 5.5: Anthropic names compaction among the jobs it is built for, at a fraction of the
-// chat model's price. Claude Code compacts with the chat's own model and has no setting for another, and the
-// summarizer's request does not pass through turn.step, so the mod answers session.compact itself: the transcript as
-// text, Haiku's summary back as the conversation. Anything that fails falls through to Claude Code's own compaction.
-const COMPACT_MODEL = 'claude-haiku-5-5'
-/** The transcript's most text sent to Haiku: about 600k tokens, inside its window with room for the summary. */
-const COMPACT_MAX_CHARS = 2_400_000
-const COMPACT_SYSTEM = `You compact a conversation between a user and Claude Code, an AI coding agent, so the work can continue
-in a fresh context that holds only your summary. Whoever reads it next knows nothing else about the conversation.
-
-Write a detailed summary with these sections:
-1. Primary request and intent: everything the user asked for, in detail, including changes of mind.
-2. Key technical concepts: technologies, frameworks, constraints and decisions.
-3. Files and code: every file read, created or edited, why it matters, and the important snippets or signatures.
-4. Errors and fixes: what went wrong, how it was fixed, and any feedback the user gave about it.
-5. Problem solving: what was solved and what is still being worked out.
-6. All user messages: every message the user wrote that is not a tool result, briefly and in order.
-7. Pending tasks: what the user asked for that is not done.
-8. Current work: exactly what was being done right before this summary, with file names and code. The last few
-messages come nearly uncut: carry the code and errors from them over in full, since the next step builds on them.
-9. Next step: the next step, only if it follows directly from the user's latest request, quoting that request.
-
-Be precise: keep names, paths, numbers, commands and error messages exact. Leave out pleasantries.
-Reply with the summary only.`
-
-/** The transcript as plain text for the summarizer: each message, its tool calls and their results, the long ones cut. */
-// The last messages go to Haiku nearly whole: the work in progress (the code just written, the error just seen) lives
-// in their tool calls and results, and a 400-character cut lost it mid-task.
-export const COMPACT_TAIL = 6
-const COMPACT_TAIL_CHARS = 20_000
-export function compactTranscript(messages: readonly { role: string; text: string; toolUses?: readonly { tool: string; input: unknown; text?: string }[]; toolResults?: readonly { text?: string }[] }[], toolChars = 2000, tailChars = COMPACT_TAIL_CHARS): string {
-  const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)} …[${s.length - n} more characters]` : s)
-  const tailFrom = messages.length - COMPACT_TAIL
-  return messages
-    .map((m, i) => {
-      const inTail = i >= tailFrom
-      const inputChars = inTail ? tailChars : 400
-      const resultChars = inTail ? tailChars : toolChars
-      const lines = [`${m.role === 'user' ? 'USER' : 'CLAUDE'}: ${m.text}`.trimEnd()]
-      for (const t of m.toolUses ?? []) {
-        lines.push(`  [${t.tool} ${cut(JSON.stringify(t.input ?? {}), inputChars)}]`)
-        if (t.text) lines.push(`  → ${cut(t.text, resultChars)}`)
-      }
-      if (!m.toolUses?.length) for (const r of m.toolResults ?? []) if (r.text) lines.push(`  → ${cut(r.text, resultChars)}`)
-      return lines.join('\n')
-    })
-    .join('\n\n')
-}
-
-/** Haiku's summary of the transcript, or why there is none. */
-async function haikuCompaction($: EngineInterface, messages: Parameters<typeof compactTranscript>[0], instructions?: string): Promise<{ text: string } | { fail: string }> {
-  let transcript = compactTranscript(messages)
-  if (transcript.length > COMPACT_MAX_CHARS) transcript = compactTranscript(messages, 300, 4000)
-  if (transcript.length > COMPACT_MAX_CHARS) return { fail: 'the chat is too long for Haiku' }
-  const r = await $.model.complete({
-    model: COMPACT_MODEL,
-    system: COMPACT_SYSTEM,
-    prompt: `${transcript}\n\n---\nWrite the summary now.${instructions?.trim() ? `\nThe user asked the summary to keep or stress: ${instructions.trim()}` : ''}`,
-    maxTokens: 16000,
-    effort: 'medium',
-    timeoutMs: 240_000,
-  })
-  if (!r.isAnswered) return { fail: 'reason' in r ? String(r.reason) : 'no answer' }
-  return r.text.trim().length > 200 ? { text: r.text.trim() } : { fail: 'the summary came back empty' }
-}
-
-/** The quick handoff written by Haiku from the transcript, for a chat whose cache went cold; null when it fails. */
-async function haikuHandoff($: EngineInterface, messages: Parameters<typeof compactTranscript>[0], focus = ''): Promise<string | null> {
-  let transcript = compactTranscript(messages)
-  if (transcript.length > COMPACT_MAX_CHARS) transcript = compactTranscript(messages, 300, 4000)
-  if (transcript.length > COMPACT_MAX_CHARS) return null
-  const r = await $.model.complete({
-    model: COMPACT_MODEL,
-    system: 'You read a conversation between a user and Claude Code, an AI coding agent, and write the handoff the user asks for.',
-    prompt: `${transcript}\n\n---\n${withFocus(HANDOFF_PROMPT, focus)}`,
-    maxTokens: 4000,
-    effort: 'medium',
-    timeoutMs: 120_000,
-  })
-  return r.isAnswered && r.text.trim().length > 100 ? r.text.trim() : null
-}
-
 export const register: Register = (on, options) => {
   loadedAt = Date.now()
   firstDrawLogged = false
   drawsTimed = 0
-  config = readConfig(options)
+  setConfig(readConfig(options))
   applyTheme()
   pluginOptions = options
   on('session.compact', async ($, e, next) => {
@@ -3673,7 +2235,7 @@ export const register: Register = (on, options) => {
       messages: [
         {
           role: 'user' as const,
-          text: `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation, written by Haiku 5.5 for effortless.\n\n${got.text}\n\nContinue the conversation from where it left off without asking the user any further questions.`,
+          text: `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation, written by Haiku for effortless.\n\n${got.text}\n\nContinue the conversation from where it left off without asking the user any further questions.`,
           toolUses: [],
         },
       ],
@@ -3693,10 +2255,10 @@ export const register: Register = (on, options) => {
       $.store.get('setupDone').catch(() => null),
     ])
     // Which chat this load serves, and when it started: each chat has its own render log.
-    loadedSession = String(sid).slice(0, 8)
+    setLoadedSession(String(sid).slice(0, 8))
     // Settings the app had no /config row for (see saveSetting), over the ones it passed in.
     if (kept && typeof kept === 'object' && Object.keys(kept).length) {
-      config = readConfig({ ...pluginOptions, ...kept })
+      setConfig(readConfig({ ...pluginOptions, ...kept }))
       applyTheme()
     }
     keyFromFile = kff === true
@@ -4048,7 +2610,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       return yield* send({ ...e, effort: handoffEffort })
     }
     // A helper the judge read at its spawn runs every request at the answer for the model it runs on. A model that takes no
-    // effort (Haiku 4.5) sends none.
+    // effort (an older Haiku) sends none.
     if (e.agentId !== undefined && config.helpers === 'on' && typeof e.effort === 'string') {
       const verdict = await helperEffortOf($, e.agentId)
       const effort = verdict ? (await helperSettled($, verdict, e.model))?.effort : undefined
@@ -4726,7 +3288,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
                 ...[...new Set([...(shown.handoffSkill ? [shown.handoffSkill] : []), ...skillNames])].map(name => ({ value: name, label: `/${name}` })),
               ], onSelect: v => set('handoffSkill')(v === '-' ? '' : v) }),
             // Which model writes a compaction's summary.
-            pick({ key: "settings-compact-with", label: "Compact with", value: shown.compactWith, options: [{ value: 'haiku', label: 'Haiku 5.5' }, { value: 'session', label: "Chat's model" }], onSelect: set('compactWith') }),
+            pick({ key: "settings-compact-with", label: "Compact with", value: shown.compactWith, options: [{ value: 'haiku', label: 'Haiku' }, { value: 'session', label: "Chat's model" }], onSelect: set('compactWith') }),
             pick({ key: "settings-swamp", label: "Compact alert at", value: shown.swampAt, options: SWAMP_STEPS.map(n => ({ value: String(n), label: `${n}%` })), onSelect: set('swampAt') }),
             pick({ key: "settings-handoff-button", label: "Handoff button", value: shown.handoffButton, options: [{ value: 'advised', label: 'When advised' }, { value: 'always', label: 'Always' }], onSelect: set('handoffButton') }),
             ...alertToggles,

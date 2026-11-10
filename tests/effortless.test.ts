@@ -1,12 +1,19 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, tipped, bounded, handoffEvidence, parseHandoffAnswer, withTypesafeKey, withEnvLine, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, judgeFailure, contextFrom, readConfig, timingWarnings, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseDecisionAnswer, parseTypesafeKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
+import { setupNext, setupBack, setupCounter, claudeCandidates, noClaudeHint } from '../hooks/setup'
+import { dashboardLines, flashColor, handoffGlowStep, handoffLook, JUDGE_FADE_MS, JUDGE_PIECE_MS, JUDGE_RISE_MS, JUDGE_STEP_MS, judgeBrightnessAt, judgeGlowAt, judgeGlowSvg } from '../hooks/svgs'
+import { asSpent, savedText, weighted } from '../hooks/stats'
+import { hotVisible, tipped, bounded, capped, resetLabel, cacheColor, cacheLabel, cacheClock, cacheTtlOf, mostlyCached } from '../hooks/usage'
+import { compactTranscript, forkOutcome, HANDOFF_PROMPT, handoffMessage } from '../hooks/handoff'
+import { helperFloor, namedEffort, handoffEvidence, parseHandoffAnswer, parseVerdict, withAttachments, endsOnQuestion, keepsEffort, judgeFailure, contextFrom, isFollowUp, parseDecisionAnswer } from '../hooks/judge'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
+import { cacheSafe, readConfig, timingWarnings } from '../hooks/config'
 import { hopTimeout, MAX_ROUTES, movedEarlier, parseDecisionModels, routeLabel, routeShortName, withoutRoute, withRoute } from '../hooks/decisions'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
-import { afterPrompt, currentStep, phaseAtTurnEnd, progressShare, progressShows, progressTitle, soundArgv, stepNumber, stepsFromTodos, withTaskCreated, withTaskUpdated } from '../hooks/progress'
+import { progressShare, stepsFromTodos, withTaskCreated, withTaskUpdated } from '../hooks/progress'
+import { parseTypesafeKey, withEnvLine, withTypesafeKey } from '../hooks/env'
 
 
 // Most tests below were written for the footer's buttons: they run in the minimal look unless they name another.
@@ -169,7 +176,7 @@ describe('auto', () => {
     expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'low' })
   })
 
-  test('on Fable 5.1 a judged prompt applies the fable answer, and the request goes out at that effort', async ($, on) => {
+  test('on Fable a judged prompt applies the fable answer, and the request goes out at that effort', async ($, on) => {
     engine(on, {}, 'claude-fable-5-1')
     judgeSays(on, '{"haiku":"max","sonnet":"high","opus":"medium","fable":"low","why":"simple question"}')
     const sent = recordSteps(on)
@@ -460,7 +467,7 @@ describe('footer text', () => {
     await footer.unmount()
   })
 
-  test('on Haiku 5.5 the effort is named and applied: the Haiku answer', async ($, on) => {
+  test('on Haiku the effort is named and applied: the Haiku answer', async ($, on) => {
     engine(on, {}, 'claude-haiku-5-5')
     judgeSays(on, '{"haiku":"high","sonnet":"low","opus":"low","why":"simple"}')
     const sent = recordSteps(on)
@@ -906,7 +913,7 @@ describe('cache guard', () => {
     await footer.unmount()
   })
 
-  test('a pick made on Opus 5.5 is not applied to a Fable request', async ($, on) => {
+  test('a pick made on Opus is not applied to a Fable request', async ($, on) => {
     engine(on)
     judgeSays(on, '{"haiku":"max","sonnet":"high","opus":"low","fable":"high","why":"x"}')
     const sent: unknown[] = []
@@ -1257,8 +1264,9 @@ describe('model-aware effort', () => {
     for (const b of bodies.slice(1)) expect(b).toEqual(first)
     expect(Object.keys(first.state).sort()).toEqual(['next_message', 'recent_conversation', 'task'])
     expect(Object.keys(first.questions)).toEqual(['effort_haiku', 'effort_sonnet', 'effort_opus', 'effort_fable'])
-    expect(first.questions.effort_opus.instructions).toContain('Opus 5.5')
-    expect(first.questions.effort_fable.instructions).toContain('Fable 5.1')
+    for (const q of Object.values(first.questions)) expect(q.instructions).not.toMatch(/\d\.\d/)
+    expect(first.questions.effort_opus.instructions).toContain('Opus')
+    expect(first.questions.effort_fable.instructions).toContain('Fable')
     // Each model has its own scale: the same level is described differently per model.
     expect(first.questions.effort_haiku.criteria.high).not.toBe(first.questions.effort_sonnet.criteria.high)
     // The decision task is the tuned intro, a blank line, then the rules every judge gets (EFFORT_RULES).
@@ -1428,7 +1436,7 @@ describe('setup guide', () => {
     await band.press({ key: 'setup-haiku' })
     // Nothing is saved yet: each saved setting reloads the plugin and puts a notice in the chat.
     expect(set).toEqual([])
-    expect(said.join(' ')).toContain('Haiku 5.5 judges')
+    expect(said.join(' ')).toContain('Haiku judges')
 
     // 2/4 the lean: each stop is named and says what it does; the track lights toward the marker.
     expect(await drawn(band)).toContain('2/4')
@@ -1661,7 +1669,7 @@ describe('compaction by Haiku', () => {
     expect(text).toContain('[3000 more characters]')
   })
 
-  test('Haiku 5.5 writes the summary, with the note typed after /compact; Claude Code does not compact', async ($, on) => {
+  test('Haiku writes the summary, with the note typed after /compact; Claude Code does not compact', async ($, on) => {
     engine(on, {}, 'claude-opus-5-5', said as never)
     const ran = core(on)
     const asked: { model: string; prompt: string }[] = []
@@ -2589,8 +2597,7 @@ describe('settings panel', () => {
     await panel.press({ key: 'settings-card-show' })
     await panel.press({ key: 'show-box-timer' })
     await panel.press({ key: 'show-box-reason' })
-    expect(await panel.find({ key: 'show-box-sounds' })).toBeUndefined()
-    // The judge line starts off, so its box switches it on; the cache timer goes off. No progress, sounds or alert.
+    // The judge line starts off, so its box switches it on; the cache timer goes off. No alert.
     // The alerts are in the Handoff card, beside when the context alert shows.
     expect(await panel.find({ key: 'show-box-swamp' })).toBeUndefined()
     expect(set).toEqual([])
@@ -2614,7 +2621,7 @@ describe('settings panel', () => {
 
 describe('switching parts off', () => {
   test('readConfig keeps only parts that can be switched off; the judge-down alert is not among them', () => {
-    expect(readConfig({ hide: 'swamp, handoff,bogus,down,progress' }).hide).toEqual(['swamp', 'handoff', 'progress'])
+    expect(readConfig({ hide: 'swamp, handoff,bogus,down' }).hide).toEqual(['swamp', 'handoff'])
   })
 
   test('a hidden handoff button is not in the footer; a switched-off context alert does not show', { options: { hide: 'handoff,swamp' } } as never, async ($, on) => {
@@ -2646,16 +2653,13 @@ describe('the command file', () => {
 })
 
 
-// The progress bar is switched off for now (hooks/progress.tsx stays for later): its rules only.
-describe('progress bar rules', () => {
+// The task step list the agent panel follows: its rules.
+describe('task step rules', () => {
   const todos = (statuses: ('pending' | 'in_progress' | 'completed')[]) =>
     statuses.map((status, i) => ({ content: `Step ${i + 1}`, activeForm: `Doing step ${i + 1}`, status }))
-  test('the steps: share, number and the one named', () => {
+  test('the steps: share', () => {
     const steps = stepsFromTodos(todos(['completed', 'in_progress', 'pending', 'pending']))
     expect(progressShare(steps)).toBe(1.5 / 4)
-    expect(stepNumber(steps)).toBe(2)
-    expect(currentStep(steps)?.doing).toBe('Doing step 2')
-    expect(stepNumber(stepsFromTodos(todos(['completed', 'completed', 'completed'])))).toBe(3)
     expect(progressShare([])).toBe(0)
   })
 
@@ -2665,43 +2669,6 @@ describe('progress bar rules', () => {
     steps = withTaskUpdated(steps, { taskId: '1', status: 'in_progress' })
     expect(steps.map(s => [s.id, s.status, s.doing])).toEqual([['1', 'in_progress', 'Reading'], ['2', 'pending', 'Write']])
     expect(withTaskUpdated(steps, { taskId: '2', status: 'deleted' }).map(s => s.id)).toEqual(['1'])
-  })
-
-  test('a turn ends done, asking or paused; too short a list ends the bar', () => {
-    const q = endsOnQuestion
-    const p = (s: ('pending' | 'in_progress' | 'completed')[]) => ({ phase: 'working' as const, steps: stepsFromTodos(todos(s)) })
-    expect(phaseAtTurnEnd(p(['completed', 'completed', 'completed']), { reason: 'answer', answer: 'All done.' }, q)).toBe('done')
-    expect(phaseAtTurnEnd(p(['completed', 'pending', 'pending']), { reason: 'answer', answer: 'Should I go on?' }, q)).toBe('asking')
-    expect(phaseAtTurnEnd(p(['completed', 'pending', 'pending']), { reason: 'aborted', answer: '' }, q)).toBe('paused')
-    expect(phaseAtTurnEnd(p(['completed', 'pending']), { reason: 'answer', answer: '' }, q)).toBeNull()
-  })
-
-  test('a prompt carries an asking or paused task on and ends a finished one; slash commands change nothing', () => {
-    const steps = stepsFromTodos(todos(['completed', 'pending', 'pending']))
-    const said = { text: 'yes', origin: { kind: 'composer' } }
-    expect(afterPrompt({ phase: 'asking', steps }, said)?.phase).toBe('working')
-    expect(afterPrompt({ phase: 'paused', steps }, said)?.phase).toBe('working')
-    expect(afterPrompt({ phase: 'done', steps }, said)).toBeNull()
-    expect(afterPrompt({ phase: 'done', steps }, { text: '/effortless debug', origin: { kind: 'composer' } })?.phase).toBe('done')
-  })
-
-  test('where it shows, what it says, and when the judge calls a turn big', () => {
-    const steps = stepsFromTodos(todos(['completed', 'in_progress', 'pending']))
-    expect(progressShows({ phase: 'working', steps }, null, 'active')).toBe(true)
-    expect(progressShows({ phase: 'working', steps }, null, 'resting')).toBe(false)
-    expect(progressShows({ phase: 'done', steps }, null, 'active')).toBe(true)
-    expect(progressShows({ phase: 'paused', steps }, null, 'resting')).toBe(true)
-    expect(progressShows({ phase: 'working', steps }, 'Step 1\nStep 2\nStep 3', 'active')).toBe(false)
-    expect(progressShows({ phase: 'working', steps: steps.slice(0, 2) }, null, 'active')).toBe(false)
-    expect(progressTitle({ phase: 'asking', steps })).toBe('Waiting for your answer · step 2 of 3')
-    expect(progressTitle({ phase: 'done', steps })).toBe('Done · all 3 steps')
-  })
-
-  test('Windows plays the chime with PowerShell; elsewhere the app plays it', () => {
-    const argv = soundArgv('C:\\Users\\x\\plugins\\effortless', 'sounds/done.wav')
-    expect(argv?.[0]).toBe('powershell.exe')
-    expect(argv?.join(' ')).toContain("SoundPlayer 'C:\\Users\\x\\plugins\\effortless\\sounds\\done.wav'")
-    expect(soundArgv('/Users/x/.claude/plugins/effortless', 'sounds/done.wav')).toBeNull()
   })
 
 })
@@ -3587,7 +3554,7 @@ describe('agent panel', () => {
     expect(sent.map(s => s.effort)).toEqual(['medium'])
   })
 
-  test('with Helpers on, a Haiku 5.5 subagent runs at the Haiku answer', { options: { helpers: 'on' } } as never, async ($, on) => {
+  test('with Helpers on, a Haiku subagent runs at the Haiku answer', { options: { helpers: 'on' } } as never, async ($, on) => {
     judgeSays(on, '{"haiku":"max","sonnet":"xhigh","opus":"high","why":"a big search"}')
     on('agent.spawn', () => ({ agentId: 'h8', model: 'claude-haiku-5-5' }) as never)
     const sent = recordSteps(on)
@@ -3693,7 +3660,7 @@ describe('agent panel', () => {
     expect(relPath('/elsewhere/a.ts', '/proj')).toBeNull()
     expect(importsOf('hooks/a.tsx', "import x from './b'\nimport type { T } from '../types'")).toEqual(['hooks/b', 'types'])
     expect(importsOf('pkg/mod.py', 'from .util import x\nimport os')).toEqual(['pkg/util', 'os'])
-    expect(moduleOf('docs/agent-panel/mockups/x.mjs')).toBe('docs/agent-panel')
+    expect(moduleOf('tools/render-band/out/x.mjs')).toBe('tools/render-band')
     expect(moduleOf('README.md')).toBe('project')
     let files = withTouch([], 'hooks/a.ts', false, 'main', 1, ['types'])
     files = withTouch(files, 'types/index.d.ts', true, 'a1', 2, [])

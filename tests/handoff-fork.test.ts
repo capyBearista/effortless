@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { HANDOFF_FULL_PROMPT, HANDOFF_PROMPT, handoffArgs, handoffMessage, withFocus } from '../hooks/register'
+import { HANDOFF_FULL_PROMPT, HANDOFF_PROMPT, handoffArgs, handoffMessage, withFocus } from '../hooks/handoff'
 
 // The fork's handoff: a detailed Full prompt, an optional focus for the next session, and Full's turn at medium.
 // Like effortless.test.ts, the tests run in the minimal look.

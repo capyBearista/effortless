@@ -3,8 +3,8 @@ import { MARK_SVG } from './brand-mark'
 import { accent, tintHex } from './theme'
 import { ART_H, ART_W, looks, PILL_H, progressArtSvg, progressShare, progressTrackSvg, THINK_W, thinkingSvg } from './progress'
 
-// The agent panel (docs/agent-panel/): a pane on the right with this chat and the subagents it sends off. Its own file,
-// like progress.tsx: the rules and the drawing live here, and what needs $ (the hooks, the state) is a short section in
+// The agent panel: a pane on the right with this chat and the subagents it sends off. Its own file: the rules and the
+// drawing live here, and what needs $ (the hooks, the state) is a short section in
 // register.tsx, since the engine follows $ only into functions of the file that holds the hooks.
 //
 // Built from the bar's own parts, not new ones: the dashboard's card (mark, bold word, ring), the progress band's looks
@@ -586,7 +586,7 @@ export function demoAgents(nowMs: number): AgentRec[] {
   return [
     { id: 'demo-1', type: 'Explore', task: 'find the pane and agent hooks', state: 'running', startedAt: nowMs - 103_000, model: 'Haiku', effort: 'Low', why: 'read-only search, wide but shallow', file: 'hooks/agents.tsx',
       now: 'Grep "agentId" in hooks/', steps: [step('List hooks', 'completed', 0), step('Read types', 'completed', 1), step('Find spawn', 'in_progress', 2), step('Report', 'pending', 3)] },
-    { id: 'demo-2', type: 'code-reviewer', task: 'review the agent-panel branch', state: 'waiting', file: 'tests/effortless.test.ts', startedAt: nowMs - 251_000, waitingSince: nowMs - 38_000, now: 'Bash npm test', model: 'Opus', effort: 'High', why: 'a review before merge: misses cost more' },
+    { id: 'demo-2', type: 'code-reviewer', task: 'review the agent panel branch', state: 'waiting', file: 'tests/effortless.test.ts', startedAt: nowMs - 251_000, waitingSince: nowMs - 38_000, now: 'Bash npm test', model: 'Opus', effort: 'High', why: 'a review before merge: misses cost more' },
     { id: 'demo-3', type: 'Plan', task: 'outline the release notes', state: 'picking', startedAt: nowMs - 2_000 },
     { id: 'demo-4', type: 'general-purpose', task: 'add state for the panel', state: 'done', startedAt: nowMs - 400_000, endedAt: nowMs - 208_000, model: 'Sonnet', effort: 'Medium' },
     { id: 'demo-5', parentId: 'demo-4', type: 'Explore', task: 'read the tests', state: 'done', startedAt: nowMs - 380_000, endedAt: nowMs - 340_000, model: 'Haiku', effort: 'Low' },
@@ -602,7 +602,7 @@ export function demoFiles(nowMs: number): FileTouch[] {
     f('hooks/progress.tsx', false, ['types']),
     f('types/index.d.ts', true, []),
     f('tests/effortless.test.ts', false, ['hooks/register', 'hooks/progress']),
-    f('docs/agent-panel/PLAN.md', false, []),
+    f('docs/known-issues.md', false, []),
     f('tools/render-band/render.mjs', false, []),
   ]
 }

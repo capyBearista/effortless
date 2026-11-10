@@ -323,7 +323,7 @@ function appZoom() {
 function dumpTree() {
   const work = mkdtempSync(join(tmpdir(), 'effortless-render-'))
   try {
-    for (const part of ['.claude-plugin', 'hooks', 'commands', 'sounds', 'types', 'tsconfig.json'])
+    for (const part of ['.claude-plugin', 'hooks', 'commands', 'types', 'tsconfig.json'])
       if (existsSync(join(REPO, part))) cpSync(join(REPO, part), join(work, part), { recursive: true })
     if (glow) {
       const file = join(work, 'hooks', 'register.tsx')

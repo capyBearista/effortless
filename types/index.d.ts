@@ -67,7 +67,7 @@ export type SettingsDraft = {
   swampAt?: string
   /** default (dashboard band) or minimal (footer buttons). */
   layout?: string
-  /** haiku (Haiku 5.5 writes the compaction's summary) or session (the chat's own model). */
+  /** haiku (Haiku writes the compaction's summary) or session (the chat's own model). */
   compactWith?: string
   /** advised (the slot is Compact until Haiku advises a handoff) or always (the slot is the Handoff button). */
   handoffButton?: string
@@ -78,7 +78,7 @@ export type SettingsDraft = {
   appearance?: string
 }
 
-/** One step of the task the progress bar follows: a todo or a task. */
+/** One step of a task the agent panel follows: a todo or a task. */
 export type ProgressStep = {
   id: string
   /** What the step is ("Run the tests"). */
@@ -88,7 +88,7 @@ export type ProgressStep = {
   status: 'pending' | 'in_progress' | 'completed'
 }
 
-/** The progress bar's state: where the task is, and its steps. */
+/** A task's state: where the task is, and its steps. */
 export type Progress = {
   phase: 'planning' | 'working' | 'asking' | 'paused' | 'done'
   steps: ProgressStep[]
@@ -207,10 +207,6 @@ declare module 'claude-code' {
       appEffort: string | null
       /** The model the session runs now, as the engine last reported it (start, a switch, a request). */
       model: ModelKey | null
-      /** The task the progress bar follows, or null when there is none. */
-      progress: Progress | null
-      /** The step list the progress bar was closed for; a new list shows it again. */
-      progressHidden: string | null
       /** This chat's subagents, oldest first, for the agent panel. */
       agents: AgentRec[]
       /** The agent card opened in the panel, or 'done' for the finished ones, or null. */
