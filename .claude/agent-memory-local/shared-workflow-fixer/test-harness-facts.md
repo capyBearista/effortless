@@ -14,6 +14,7 @@ metadata:
 - A handler may return a Promise: `on('model.complete', async () => { started(); await gate; return {...} })` holds a judge open, so a test can press a button while it runs (verified 2026-11-09).
 - `ui.find({ key })` returns the Button's props as JSON, so `"label":"low · manual"` is checkable (verified 2026-11-09).
 - A read inside a hook after an `await` can still give the value from before another hook's write: the judge's hook still saw Auto on and no pick after a click that the band (another hook) drew as Auto off. Carry hand changes across hooks through module state, as `heldPick` and `engineEffort` do (verified 2026-11-09, `handChanges` in hooks/register.tsx).
+- A sibling module may call `$`, but past an import the engine follows `$` only into a function DECLARATION (`function f($) {}` / `async function f($) {}`). A `const f = ($) => ...` that receives `$` makes the whole hooks module fail to load (`claude plugin validate` exits 1; every test fails with a HooksError). So every function that takes `$` in a split-out file must be a declaration (verified 2026-11-09, hooks/env.ts). Check with `claude plugin validate . --json`: the `./register.tsx calls:` note must list the same `$.x.y` set as before.
 - Update this when the harness changes (it was read from the claude-code testing types on 2026-11-09).
 
 **Why:** each of these cost a failed run while writing the band tests.

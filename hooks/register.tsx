@@ -6,6 +6,7 @@ import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolL
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
 import { chainIds, DECISION_PRESETS, type DecisionRoute, hopTimeout, MAX_ROUTES, movedEarlier, OPENROUTER_APP_HEADERS, OPENROUTER_URL, parseDecisionModels, routeLabel, routeName, routeShortName, withoutRoute, withRoute, ZEN_URL } from './decisions'
+import { type EnvAsk, envHome, envOpenRouterKey, envTypesafeKey, envTypesafeUrl, envUserProfile, loadedSession, parseEnvLine, parseTypesafeKey, proof, renderLog, setLoadedSession, typedTypesafeKey, withEnvLine, withTypesafeKey, writeRenderLog } from './env'
 import { accent, onKnob, setLight, setMatchApp, setTheme, themedEls, type ThemeName, THEMES, tintHex } from './theme'
 import { PILL_H, stepsFromTodos, thinkingSvg, THINK_W, withTaskCreated, withTaskUpdated } from './progress'
 
@@ -530,22 +531,6 @@ let handChanges = 0
 /** A short follow-up that keeps the current effort: "go" between two steps, not an answer to a question. */
 export function keepsEffort(message: string, context: string): boolean {
   return isFollowUp(message) && !endsOnQuestion(context)
-}
-
-/** The TypeSafe key in a ~/.config/jev/.env file's text. */
-export function parseTypesafeKey(text: string): string | undefined {
-  return parseEnvLine(text, 'TYPESAFE_API_KEY')
-}
-
-/** A typed or pasted TypeSafe key: a TYPESAFE_API_KEY=… line gives its value (none when empty), else the text itself. */
-function typedTypesafeKey(text: string): string | undefined {
-  return /^\s*TYPESAFE_API_KEY\s*=/.test(text) ? parseTypesafeKey(text) : text
-}
-
-/** A NAME=value line's value in an .env file's text, quotes taken off. */
-export function parseEnvLine(text: string, name: string): string | undefined {
-  const value = text.match(new RegExp(`^\\s*${name}\\s*=\\s*(.*?)\\s*$`, 'm'))?.[1].replace(/^['"]|['"]$/g, '')
-  return value || undefined
 }
 
 // The band's words when effortless kept the effort because the judge was unsure.
@@ -1119,44 +1104,6 @@ async function resettle($: EngineInterface) {
 async function sessionModel($: EngineInterface): Promise<ModelKey> {
   const id = await $.session.model()
   return MODELS.find(m => id.includes(m.key))?.key ?? 'sonnet'
-}
-
-
-// Proof log: every verdict, /effort and request effort, written to EFFORTLESS_LOG, or to
-// %TEMP%/effortless-proof.log while the mod is loaded from a dev-mods folder. Off otherwise.
-const proofLines: string[] = []
-// An environment variable does not change while the session runs, so each one is asked for once. The
-// engine wants the name spelled out in every $.env.get call, hence one small getter per variable.
-type EnvAsk = Promise<string | undefined> | undefined
-let askLog: EnvAsk
-let askTemp: EnvAsk
-let askTmpdir: EnvAsk
-let askTypesafeUrl: EnvAsk
-let askTypesafeKey: EnvAsk
-let askOpenRouterKey: EnvAsk
-let askUserProfile: EnvAsk
-let askHome: EnvAsk
-const envLog = ($: EngineInterface) => (askLog = askLog ?? $.env.get('EFFORTLESS_LOG'))
-const envTemp = ($: EngineInterface) => (askTemp = askTemp ?? $.env.get('TEMP'))
-const envTmpdir = ($: EngineInterface) => (askTmpdir = askTmpdir ?? $.env.get('TMPDIR'))
-const envTypesafeUrl = ($: EngineInterface) => (askTypesafeUrl = askTypesafeUrl ?? $.env.get('TYPESAFE_URL'))
-const envTypesafeKey = ($: EngineInterface) => (askTypesafeKey = askTypesafeKey ?? $.env.get('TYPESAFE_API_KEY'))
-const envOpenRouterKey = ($: EngineInterface) => (askOpenRouterKey = askOpenRouterKey ?? $.env.get('OPENROUTER_API_KEY'))
-const envUserProfile = ($: EngineInterface) => (askUserProfile = askUserProfile ?? $.env.get('USERPROFILE'))
-const envHome = ($: EngineInterface) => (askHome = askHome ?? $.env.get('HOME'))
-
-async function proofPath($: EngineInterface): Promise<string | undefined> {
-  const named = await envLog($)
-  if (named) return named
-  if (!$.plugin.root.replace(/\\/g, '/').includes('/dev-mods/')) return undefined
-  const tmp = (await envTemp($)) ?? (await envTmpdir($)) ?? '/tmp'
-  return `${tmp}/effortless-proof.log`
-}
-async function proof($: EngineInterface, line: string) {
-  const path = await proofPath($).catch(() => undefined)
-  if (!path) return
-  proofLines.push(`${new Date().toISOString()} ${line}`)
-  await $.fs.write(path, proofLines.slice(-200).join('\n') + '\n').catch(() => undefined)
 }
 
 // The effort the engine itself last asked for on the main loop (the app's setting; this mod only
@@ -2045,19 +1992,6 @@ async function saveDraft($: EngineInterface) {
   await drainSetupSave($)
 }
 
-/** A TYPESAFE_API_KEY line set in an .env file's text: replaced where it is, added where it is not. */
-export function withTypesafeKey(text: string, key: string): string {
-  return withEnvLine(text, 'TYPESAFE_API_KEY', key)
-}
-
-/** A NAME=value line set in an .env file's text: replaced where it is, added where it is not. */
-export function withEnvLine(text: string, name: string, value: string): string {
-  const line = `${name}=${value}`
-  const at = new RegExp(`^\\s*${name}\\s*=.*$`, 'm')
-  if (at.test(text)) return text.replace(at, () => line)
-  return `${text}${text && !text.endsWith('\n') ? '\n' : ''}${line}\n`
-}
-
 /**
  * Fork: an OpenRouter key pasted in the panel or the guide goes to ~/.config/openrouter/effortless.env, readable by its owner
  * only. From then on that file wins over an older key in the settings. Says whether it was saved.
@@ -2467,20 +2401,7 @@ let probeLevel = 0
 let renderCalls = 0
 let lastRenderProps = ''
 let lastRenderBranch = ''
-// Every time the app asked for the band, with what it sent, written to ~/.claude/effortless-render-<chat>.log each second
-// (the last 300): how often the band is really redrawn in the app, which the render rig cannot see (hover flicker).
-const renderLog: string[] = []
-let renderLogWritten = 0
-async function writeRenderLog($: EngineInterface) {
-  if (renderLog.length === renderLogWritten) return
-  if (renderLog.length > 600) renderLog.splice(0, renderLog.length - 300)
-  renderLogWritten = renderLog.length
-  const home = (await envUserProfile($)) ?? (await envHome($))
-  // One file per chat: a shared file was overwritten whole by whichever chat drew last.
-  if (home) await $.fs.write(`${home}/.claude/effortless-render-${loadedSession}.log`, renderLog.slice(-300).join('\n') + '\n').catch(() => undefined)
-}
 let lastRenderAt = 0
-let loadedSession = '-'
 // When this module loaded, for the render log's "first draw" line.
 let loadedAt = Date.now()
 let firstDrawLogged = false
@@ -3687,7 +3608,7 @@ export const register: Register = (on, options) => {
       $.store.get('setupDone').catch(() => null),
     ])
     // Which chat this load serves, and when it started: each chat has its own render log.
-    loadedSession = String(sid).slice(0, 8)
+    setLoadedSession(String(sid).slice(0, 8))
     // Settings the app had no /config row for (see saveSetting), over the ones it passed in.
     if (kept && typeof kept === 'object' && Object.keys(kept).length) {
       config = readConfig({ ...pluginOptions, ...kept })
