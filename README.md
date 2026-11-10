@@ -37,15 +37,15 @@ prompt cache stays warm, and hands off or compacts in one click when a chat gets
   <img src="docs/readme/story.gif" alt="effortless in a Claude Code chat: effort per prompt, Handoff, cold cache, heavy chat, limits and settings" width="100%">
 </p>
 
-## Powered by Haiku 5.5
+## Powered by Haiku
 
-Haiku 5.5 costs about 75% less than Haiku 4.5, and Anthropic names compaction and quick, well-defined work among what
+Haiku costs a fraction of the chat model, and Anthropic names compaction and quick, well-defined work among what
 it is built for. effortless uses it in two places:
 
 | | |
 |---|---|
 | **The judge** | reads each prompt and picks the effort, in about a second, on your own Claude login |
-| **Compaction** | every compaction, `/compact` and the automatic one included, is summarized by Haiku 5.5. If Haiku fails, Claude Code compacts as usual |
+| **Compaction** | every compaction, `/compact` and the automatic one included, is summarized by Haiku. If Haiku fails, Claude Code compacts as usual |
 
 Compaction is switched in Settings → Handoff → Compact with.
 
@@ -108,7 +108,7 @@ git and saves a detailed `HANDOFF.md` under `docs/` (or the project root), at Me
 
 <p align="center"><img src="docs/readme/handoff.png" alt="The Handoff bar with Quick and Full" width="100%"></p>
 
-**Compact** takes an optional note for what the summary should keep. Every compaction, also `/compact` and the automatic one, is written by **Haiku 5.5** by default, which Anthropic recommends for compaction at a fraction of the chat model's price; if Haiku fails, Claude Code compacts as usual. Switch it in Settings → Handoff → Compact with.
+**Compact** takes an optional note for what the summary should keep. Every compaction, also `/compact` and the automatic one, is written by **Haiku** by default, which Anthropic recommends for compaction at a fraction of the chat model's price; if Haiku fails, Claude Code compacts as usual. Switch it in Settings → Handoff → Compact with.
 
 <p align="center"><img src="docs/readme/compact.png" alt="The Compact bar with an optional summary field" width="100%"></p>
 
@@ -121,7 +121,7 @@ limit passes 80% (with a Save mode that caps effort at Medium), and when your ju
 
 ## Haiku, and decision models if you add them
 
-Haiku 5.5 runs on your own Claude login and needs no key. It always makes the handoff call: from 30% of context, every second message, it reads what the chat was for, the trail of topics, the last reply and how full the context is, and says a fresh chat would suit only for a clear reason. Then the Compact button turns into a lit Handoff with the reason. Want Handoff on the bar all the time? Settings → Handoff → Handoff button → **Always**.
+Haiku runs on your own Claude login and needs no key. It always makes the handoff call: from 30% of context, every second message, it reads what the chat was for, the trail of topics, the last reply and how full the context is, and says a fresh chat would suit only for a clear reason. Then the Compact button turns into a lit Handoff with the reason. Want Handoff on the bar all the time? Settings → Handoff → Handoff button → **Always**.
 
 Haiku also picks the effort, unless you add a decision model, a faster one such as `typesafe/jev-latest` (TypeSafe's Jev, about 0.25 s against about 1 s). The decision models answer the effort first, in order, and Haiku steps in whenever they are unsure or none answers. Run `/plugin configure effortless@capybearista` in Claude Code, or use the setup guide or the Judge card in Settings.
 

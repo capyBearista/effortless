@@ -67,7 +67,7 @@ export type SettingsDraft = {
   swampAt?: string
   /** default (dashboard band) or minimal (footer buttons). */
   layout?: string
-  /** haiku (Haiku 5.5 writes the compaction's summary) or session (the chat's own model). */
+  /** haiku (Haiku writes the compaction's summary) or session (the chat's own model). */
   compactWith?: string
   /** advised (the slot is Compact until Haiku advises a handoff) or always (the slot is the Handoff button). */
   handoffButton?: string

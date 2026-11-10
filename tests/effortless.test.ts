@@ -169,7 +169,7 @@ describe('auto', () => {
     expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'low' })
   })
 
-  test('on Fable 5.1 a judged prompt applies the fable answer, and the request goes out at that effort', async ($, on) => {
+  test('on Fable a judged prompt applies the fable answer, and the request goes out at that effort', async ($, on) => {
     engine(on, {}, 'claude-fable-5-1')
     judgeSays(on, '{"haiku":"max","sonnet":"high","opus":"medium","fable":"low","why":"simple question"}')
     const sent = recordSteps(on)
@@ -460,7 +460,7 @@ describe('footer text', () => {
     await footer.unmount()
   })
 
-  test('on Haiku 5.5 the effort is named and applied: the Haiku answer', async ($, on) => {
+  test('on Haiku the effort is named and applied: the Haiku answer', async ($, on) => {
     engine(on, {}, 'claude-haiku-5-5')
     judgeSays(on, '{"haiku":"high","sonnet":"low","opus":"low","why":"simple"}')
     const sent = recordSteps(on)
@@ -906,7 +906,7 @@ describe('cache guard', () => {
     await footer.unmount()
   })
 
-  test('a pick made on Opus 5.5 is not applied to a Fable request', async ($, on) => {
+  test('a pick made on Opus is not applied to a Fable request', async ($, on) => {
     engine(on)
     judgeSays(on, '{"haiku":"max","sonnet":"high","opus":"low","fable":"high","why":"x"}')
     const sent: unknown[] = []
@@ -1257,8 +1257,9 @@ describe('model-aware effort', () => {
     for (const b of bodies.slice(1)) expect(b).toEqual(first)
     expect(Object.keys(first.state).sort()).toEqual(['next_message', 'recent_conversation', 'task'])
     expect(Object.keys(first.questions)).toEqual(['effort_haiku', 'effort_sonnet', 'effort_opus', 'effort_fable'])
-    expect(first.questions.effort_opus.instructions).toContain('Opus 5.5')
-    expect(first.questions.effort_fable.instructions).toContain('Fable 5.1')
+    for (const q of Object.values(first.questions)) expect(q.instructions).not.toMatch(/\d\.\d/)
+    expect(first.questions.effort_opus.instructions).toContain('Opus')
+    expect(first.questions.effort_fable.instructions).toContain('Fable')
     // Each model has its own scale: the same level is described differently per model.
     expect(first.questions.effort_haiku.criteria.high).not.toBe(first.questions.effort_sonnet.criteria.high)
     // The decision task is the tuned intro, a blank line, then the rules every judge gets (EFFORT_RULES).
@@ -1428,7 +1429,7 @@ describe('setup guide', () => {
     await band.press({ key: 'setup-haiku' })
     // Nothing is saved yet: each saved setting reloads the plugin and puts a notice in the chat.
     expect(set).toEqual([])
-    expect(said.join(' ')).toContain('Haiku 5.5 judges')
+    expect(said.join(' ')).toContain('Haiku judges')
 
     // 2/4 the lean: each stop is named and says what it does; the track lights toward the marker.
     expect(await drawn(band)).toContain('2/4')
@@ -1661,7 +1662,7 @@ describe('compaction by Haiku', () => {
     expect(text).toContain('[3000 more characters]')
   })
 
-  test('Haiku 5.5 writes the summary, with the note typed after /compact; Claude Code does not compact', async ($, on) => {
+  test('Haiku writes the summary, with the note typed after /compact; Claude Code does not compact', async ($, on) => {
     engine(on, {}, 'claude-opus-5-5', said as never)
     const ran = core(on)
     const asked: { model: string; prompt: string }[] = []
@@ -3546,7 +3547,7 @@ describe('agent panel', () => {
     expect(sent.map(s => s.effort)).toEqual(['medium'])
   })
 
-  test('with Helpers on, a Haiku 5.5 subagent runs at the Haiku answer', { options: { helpers: 'on' } } as never, async ($, on) => {
+  test('with Helpers on, a Haiku subagent runs at the Haiku answer', { options: { helpers: 'on' } } as never, async ($, on) => {
     judgeSays(on, '{"haiku":"max","sonnet":"xhigh","opus":"high","why":"a big search"}')
     on('agent.spawn', () => ({ agentId: 'h8', model: 'claude-haiku-5-5' }) as never)
     const sent = recordSteps(on)

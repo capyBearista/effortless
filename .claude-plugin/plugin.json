@@ -131,7 +131,7 @@
     "compactWith": {
       "type": "string",
       "title": "Compact with",
-      "description": "haiku: Haiku 5.5 writes the summary when the chat is compacted (far cheaper). session: the chat's own model, as Claude Code does it.",
+      "description": "haiku: Haiku writes the summary when the chat is compacted (far cheaper). session: the chat's own model, as Claude Code does it.",
       "default": "haiku",
       "options": [
         "haiku",

@@ -21,7 +21,7 @@ export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // 80k requests of real Claude Code use, cache reads are about 76% of a session's cost, cache writes 16% and output 8%: effort
 // mostly changes how many tool calls a prompt makes, not what one answer writes, so all four are counted.
 const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
-// shortcut: every Claude family is taken to keep the prompt cache when effort changes, as Opus/Sonnet/Haiku 5.5 and Fable 5.1+
+// shortcut: every Claude family is taken to keep the prompt cache when effort changes, as Opus, Sonnet, Haiku and Fable
 // do per Claude Code's docs; older models (which rewrote it) and no-cache setups are not detected (README, Models).
 export const cacheSafe = (modelId: string) => /opus|sonnet|haiku|fable/.test(modelId)
 // The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
@@ -340,7 +340,7 @@ const JUDGED: readonly JudgedModel[] = ['haiku', 'sonnet', 'opus', 'fable']
 // over 6 decision models, against 13.9 for the old text. The Haiku-as-judge path is not measured.
 const MODEL_LEVELS: Record<JudgedModel, { instructions: string; levels: Record<Effort, string> }> = {
   haiku: {
-    instructions: 'Which effort should Claude Haiku 5.5 use for the next message? Haiku is the smallest model, so it needs more effort than a larger model for the same work: the same as the work alone suggests for a quick answer or trivial step, and one level more for any real task such as a fix, a feature, an analysis or a plan.',
+    instructions: 'Which effort should Claude Haiku use for the next message? Haiku is the smallest model, so it needs more effort than a larger model for the same work: the same as the work alone suggests for a quick answer or trivial step, and one level more for any real task such as a fix, a feature, an analysis or a plan.',
     levels: {
       low: 'quick answer or trivial action: no tools or one simple step, no planning',
       medium: 'normal work: a few tool calls or edits',
@@ -350,7 +350,7 @@ const MODEL_LEVELS: Record<JudgedModel, { instructions: string; levels: Record<E
     },
   },
   sonnet: {
-    instructions: 'Which effort should Claude Sonnet 5.5 use for the next message?',
+    instructions: 'Which effort should Claude Sonnet use for the next message?',
     levels: {
       low: 'quick answer or trivial action: no tools or one simple step, no planning',
       medium: 'normal work: a few tool calls or edits',
@@ -360,7 +360,7 @@ const MODEL_LEVELS: Record<JudgedModel, { instructions: string; levels: Record<E
     },
   },
   opus: {
-    instructions: 'Which effort should Claude Opus 5.5 use for the next message? Opus is a strong model, so it needs less effort than a smaller model for the same work: one level lower than the work alone suggests. Ordinary focused work (an explanation, a contained fix, a small feature) is low for Opus.',
+    instructions: 'Which effort should Claude Opus use for the next message? Opus is a strong model, so it needs less effort than a smaller model for the same work: one level lower than the work alone suggests. Ordinary focused work (an explanation, a contained fix, a small feature) is low for Opus.',
     levels: {
       low: 'quick answer or trivial action: no tools or one simple step, no planning',
       medium: 'normal work: a few tool calls or edits',
@@ -370,7 +370,7 @@ const MODEL_LEVELS: Record<JudgedModel, { instructions: string; levels: Record<E
     },
   },
   fable: {
-    instructions: 'Which effort should Claude Fable 5.1 use for the next message? Fable is the strongest model, so it needs the least effort for the same work: one or two levels lower than the work alone suggests. Ordinary focused work (an explanation, a contained fix, a small feature) is low for Fable.',
+    instructions: 'Which effort should Claude Fable use for the next message? Fable is the strongest model, so it needs the least effort for the same work: one or two levels lower than the work alone suggests. Ordinary focused work (an explanation, a contained fix, a small feature) is low for Fable.',
     levels: {
       low: 'a quick answer or everyday work: an explanation, a contained fix, a small feature',
       medium: 'normal work: a few tool calls or edits',
@@ -674,7 +674,7 @@ export type JudgeConfig = {
   swampAt: number
   /** default: the dashboard band above the prompt; minimal: the footer's small buttons and no band. */
   layout: 'default' | 'minimal'
-  /** Who writes a compaction's summary: Haiku 5.5 (the default, a fraction of the price) or the chat's own model. */
+  /** Who writes a compaction's summary: Haiku (the default, a fraction of the price) or the chat's own model. */
   compactWith: 'haiku' | 'session'
   /** advised: the footer slot is Compact until Haiku advises a handoff. always: it is always the Handoff button. */
   handoffButton: 'advised' | 'always'
@@ -984,9 +984,9 @@ async function askHaiku($: EngineInterface, prompt: string, context: string): Pr
   const used = lastContext && lastContext.window ? `Context used: ${Math.round(lastContext.percent)}% of the window` : ''
   const asked = [judgeQuestion(prompt, context), used].filter(Boolean).join('\n\n')
   const ask = (model: string) => $.model.complete({ model, system: JUDGE_SYSTEM, prompt: asked, maxTokens: 160, effort: 'low', timeoutMs: 6000 })
-  // Haiku 5.5 by name: Claude Code builds that predate it map the plain alias to Haiku 4.5, at ten times the price.
-  // Where 5.5 does not answer, the alias stands in.
-  let r = await ask(COMPACT_MODEL)
+  // Haiku by its pinned id: Claude Code builds that predate it map the plain alias to an older, ten-times-pricier Haiku.
+  // Where the pinned id does not answer, the alias stands in.
+  let r = await ask(HAIKU_MODEL)
   if (!r.isAnswered) r = await ask('haiku')
   const verdict = r.isAnswered ? parseVerdict(r.text) : undefined
   const tokens = r.isAnswered && r.usage ? r.usage.input_tokens + r.usage.output_tokens : 0
@@ -1051,7 +1051,7 @@ async function checkHandoff($: EngineInterface, next: string) {
   try {
     const evidence = handoffEvidence(await $.session.messages(), next, percent, (await cacheMinutes($)) === 0 && cacheExpires > 0)
     const ask = (model: string) => $.model.complete({ model, system: HANDOFF_SYSTEM, prompt: evidence, maxTokens: 60, effort: 'low', timeoutMs: 8000 })
-    let r = await ask(COMPACT_MODEL)
+    let r = await ask(HAIKU_MODEL)
     if (!r.isAnswered) r = await ask('haiku')
     if (!r.isAnswered) return
     const reason = parseHandoffAnswer(r.text)
@@ -2247,7 +2247,7 @@ async function pickJudge($: EngineInterface, choice: 'haiku' | 'decision') {
   await update($, setupDraft, d => ({ ...d, judge: 'auto' }))
   await markSetupDone($)
   if (choice === 'haiku') {
-    $.ui.toast('effortless: Haiku 5.5 judges, no key needed. Add a decision model later for faster answers.')
+    $.ui.toast('effortless: Haiku judges, no key needed. Add a decision model later for faster answers.')
     return goSetup($, 'lean')
   }
   if (await typesafeKey($)) {
@@ -3561,11 +3561,11 @@ async function agentWaits($: EngineInterface) {
   if (next) await update($, agentsState, () => next)
 }
 
-// A compaction written by Haiku 5.5: Anthropic names compaction among the jobs it is built for, at a fraction of the
+// A compaction written by Haiku: Anthropic names compaction among the jobs it is built for, at a fraction of the
 // chat model's price. Claude Code compacts with the chat's own model and has no setting for another, and the
 // summarizer's request does not pass through turn.step, so the mod answers session.compact itself: the transcript as
 // text, Haiku's summary back as the conversation. Anything that fails falls through to Claude Code's own compaction.
-const COMPACT_MODEL = 'claude-haiku-5-5'
+const HAIKU_MODEL = 'claude-haiku-5-5'
 /** The transcript's most text sent to Haiku: about 600k tokens, inside its window with room for the summary. */
 const COMPACT_MAX_CHARS = 2_400_000
 const COMPACT_SYSTEM = `You compact a conversation between a user and Claude Code, an AI coding agent, so the work can continue
@@ -3616,7 +3616,7 @@ async function haikuCompaction($: EngineInterface, messages: Parameters<typeof c
   if (transcript.length > COMPACT_MAX_CHARS) transcript = compactTranscript(messages, 300, 4000)
   if (transcript.length > COMPACT_MAX_CHARS) return { fail: 'the chat is too long for Haiku' }
   const r = await $.model.complete({
-    model: COMPACT_MODEL,
+    model: HAIKU_MODEL,
     system: COMPACT_SYSTEM,
     prompt: `${transcript}\n\n---\nWrite the summary now.${instructions?.trim() ? `\nThe user asked the summary to keep or stress: ${instructions.trim()}` : ''}`,
     maxTokens: 16000,
@@ -3633,7 +3633,7 @@ async function haikuHandoff($: EngineInterface, messages: Parameters<typeof comp
   if (transcript.length > COMPACT_MAX_CHARS) transcript = compactTranscript(messages, 300, 4000)
   if (transcript.length > COMPACT_MAX_CHARS) return null
   const r = await $.model.complete({
-    model: COMPACT_MODEL,
+    model: HAIKU_MODEL,
     system: 'You read a conversation between a user and Claude Code, an AI coding agent, and write the handoff the user asks for.',
     prompt: `${transcript}\n\n---\n${withFocus(HANDOFF_PROMPT, focus)}`,
     maxTokens: 4000,
@@ -3667,7 +3667,7 @@ export const register: Register = (on, options) => {
       messages: [
         {
           role: 'user' as const,
-          text: `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation, written by Haiku 5.5 for effortless.\n\n${got.text}\n\nContinue the conversation from where it left off without asking the user any further questions.`,
+          text: `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation, written by Haiku for effortless.\n\n${got.text}\n\nContinue the conversation from where it left off without asking the user any further questions.`,
           toolUses: [],
         },
       ],
@@ -4042,7 +4042,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
       return yield* send({ ...e, effort: handoffEffort })
     }
     // A helper the judge read at its spawn runs every request at the answer for the model it runs on. A model that takes no
-    // effort (Haiku 4.5) sends none.
+    // effort (an older Haiku) sends none.
     if (e.agentId !== undefined && config.helpers === 'on' && typeof e.effort === 'string') {
       const verdict = await helperEffortOf($, e.agentId)
       const effort = verdict ? (await helperSettled($, verdict, e.model))?.effort : undefined
@@ -4720,7 +4720,7 @@ model used: ${lastRequest ? `${lastRequest.model} at ${lastRequest.effort ?? 'no
                 ...[...new Set([...(shown.handoffSkill ? [shown.handoffSkill] : []), ...skillNames])].map(name => ({ value: name, label: `/${name}` })),
               ], onSelect: v => set('handoffSkill')(v === '-' ? '' : v) }),
             // Which model writes a compaction's summary.
-            pick({ key: "settings-compact-with", label: "Compact with", value: shown.compactWith, options: [{ value: 'haiku', label: 'Haiku 5.5' }, { value: 'session', label: "Chat's model" }], onSelect: set('compactWith') }),
+            pick({ key: "settings-compact-with", label: "Compact with", value: shown.compactWith, options: [{ value: 'haiku', label: 'Haiku' }, { value: 'session', label: "Chat's model" }], onSelect: set('compactWith') }),
             pick({ key: "settings-swamp", label: "Compact alert at", value: shown.swampAt, options: SWAMP_STEPS.map(n => ({ value: String(n), label: `${n}%` })), onSelect: set('swampAt') }),
             pick({ key: "settings-handoff-button", label: "Handoff button", value: shown.handoffButton, options: [{ value: 'advised', label: 'When advised' }, { value: 'always', label: 'Always' }], onSelect: set('handoffButton') }),
             ...alertToggles,
