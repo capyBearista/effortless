@@ -1984,7 +1984,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
             <Text key="dash-model" color={DASH_DIM}>{` · ${MODELS.find(m => m.key === v.modelNow)!.label}`}</Text>
           ) : null}
           {levelButtons}
-          {/* While the judge decides: the progress bar's thinking dots, as a plain image (its CSS still runs, and a
+          {/* While the judge decides: the thinking dots (drawn by progress.tsx), as a plain image (its CSS still runs, and a
               redraw does not restart it the way an interactive frame does). */}
           {v.judging && Svg ? (
             <Box key="dash-thinking" flexShrink={0} marginLeft={1} alignItems="center">

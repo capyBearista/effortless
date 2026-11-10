@@ -2,8 +2,8 @@ import { tintHex } from './theme'
 
 import type { Progress, ProgressStep } from '../types'
 
-// The task's step list (from the todo and task tools) and the drawing the agent panel and the judge's wait take from the
-// progress bar: each phase's look, its art and track, and the thinking dots.
+// The task's step list (from the todo and task tools) and the drawing the agent panel and the judge's wait use: each
+// phase's look, its art and track, and the thinking dots.
 
 /** Past this many steps the bar is one continuous fill instead of a segment per step. */
 const SEGMENTS_MAX = 12

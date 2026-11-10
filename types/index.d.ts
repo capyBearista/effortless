@@ -78,7 +78,7 @@ export type SettingsDraft = {
   appearance?: string
 }
 
-/** One step of the task the progress bar follows: a todo or a task. */
+/** One step of a task the agent panel follows: a todo or a task. */
 export type ProgressStep = {
   id: string
   /** What the step is ("Run the tests"). */
@@ -88,7 +88,7 @@ export type ProgressStep = {
   status: 'pending' | 'in_progress' | 'completed'
 }
 
-/** The progress bar's state: where the task is, and its steps. */
+/** A task's state: where the task is, and its steps. */
 export type Progress = {
   phase: 'planning' | 'working' | 'asking' | 'paused' | 'done'
   steps: ProgressStep[]
