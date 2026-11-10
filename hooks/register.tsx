@@ -5,26 +5,16 @@ import type { AgentRec, Answers, Effort, HandoffAfter, HandoffChoice, JudgedMode
 import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolLine, touchOf, withTouch, withWaits } from './agents'
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
+import { cacheSafe, config, EFFORT_LABELS, EFFORTS, HAIKU_MODEL, type Hideable, type JudgeConfig, MODELS, readConfig, setConfig, SWAMP_STEPS, timingWarnings } from './config'
 import { chainIds, DECISION_PRESETS, type DecisionRoute, hopTimeout, MAX_ROUTES, movedEarlier, OPENROUTER_APP_HEADERS, OPENROUTER_URL, parseDecisionModels, routeLabel, routeName, routeShortName, withoutRoute, withRoute, ZEN_URL } from './decisions'
 import { type EnvAsk, envHome, envOpenRouterKey, envTypesafeKey, envTypesafeUrl, envUserProfile, loadedSession, parseEnvLine, parseTypesafeKey, proof, renderLog, setLoadedSession, typedTypesafeKey, withEnvLine, withTypesafeKey, writeRenderLog } from './env'
-import { accent, onKnob, setLight, setMatchApp, setTheme, themedEls, type ThemeName, THEMES, tintHex } from './theme'
+import { accent, onKnob, setLight, setMatchApp, setTheme, themedEls, tintHex } from './theme'
 import { PILL_H, stepsFromTodos, thinkingSvg, THINK_W, withTaskCreated, withTaskUpdated } from './progress'
 
-// The ladders the two sliders walk, cheapest first.
-export const MODELS: { key: ModelKey; label: string }[] = [
-  { key: 'haiku', label: 'Haiku' },
-  { key: 'sonnet', label: 'Sonnet' },
-  { key: 'opus', label: 'Opus' },
-  { key: 'fable', label: 'Fable' },
-]
-export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // What one token costs relative to an uncached input token, the same ratios on every Claude model. Measured over
 // 80k requests of real Claude Code use, cache reads are about 76% of a session's cost, cache writes 16% and output 8%: effort
 // mostly changes how many tool calls a prompt makes, not what one answer writes, so all four are counted.
 const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
-// shortcut: every Claude family is taken to keep the prompt cache when effort changes, as Opus, Sonnet, Haiku and Fable
-// do per Claude Code's docs; older models (which rewrote it) and no-cache setups are not detected (README, Models).
-export const cacheSafe = (modelId: string) => /opus|sonnet|haiku|fable/.test(modelId)
 // The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
 let ACCENT = accent()
 /** Takes the theme the settings name; the accent and every drawing follow it. */
@@ -70,7 +60,6 @@ let BRAND_BG = '#15121f'
 let BRAND_EDGE = '#4a3f80'
 // The box behind the level while it is hovered: the grey of the app's own pills.
 let HOVER_BOX = '#2b2b2f'
-const EFFORT_LABELS: Record<Effort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
 
 // Auto: whether the judge picks the effort.
 const isAuto = atom({ plugin: 'effortless', key: 'isAuto' } as const, true)
@@ -630,129 +619,8 @@ function warnJudge($: EngineInterface, reason: string) {
   $.ui.toast(`effortless: ${reason}. Haiku judges for now.`)
 }
 
-/** Which judge the person picked in the plugin's settings, and what it needs. */
-export type JudgeConfig = {
-  judge: 'auto' | 'haiku'
-  typesafeKey: string
-  /** Decision models asked in order before Haiku. Empty: Haiku judges alone. */
-  decisionModels: DecisionRoute[]
-  /** For the openrouter/ decision models; left empty, OPENROUTER_API_KEY is used. */
-  openrouterKey: string
-  /** How long each decision model may take, in ms. */
-  judgeTimeoutMs: number
-  /** How long all the decision models together may take before Haiku judges, in ms. */
-  judgeBudgetMs: number
-  /** A skill or slash command that writes the handoff instead of the built-in prompt, e.g. "session-handoff". */
-  handoffSkill: string
-  /** What follows the handoff: clear and carry on, clear and wait, or keep the chat and copy the handoff. The handoff
-   *  bar opens on the choice made last; this is the first one. */
-  handoffAfter: HandoffAfter
-  /** The effort slider, -2 (cheaper) to 2 (smarter): tips the judge's close calls that way. */
-  bias: number
-  /** Auto never goes below this effort. */
-  floor: Effort
-  /** Auto never goes above this effort. */
-  ceiling: Effort
-  /** What the person switched off: the footer's handoff button and any of the alert bands. */
-  hide: Hideable[]
-  /** The swamp band shows once the context fills this share of the window, in percent. */
-  swampAt: number
-  /** default: the dashboard band above the prompt; minimal: the footer's small buttons and no band. */
-  layout: 'default' | 'minimal'
-  /** Who writes a compaction's summary: Haiku (the default, a fraction of the price) or the chat's own model. */
-  compactWith: 'haiku' | 'session'
-  /** advised: the footer slot is Compact until Haiku advises a handoff. always: it is always the Handoff button. */
-  handoffButton: 'advised' | 'always'
-  /** on: every subagent the chat sends off gets an effort picked by the judge before it starts. */
-  helpers: 'on' | 'off'
-  /** The accent colour of everything effortless draws: the brand violet, Claude orange or cherry-blossom rose. */
-  theme: ThemeName
-  /** auto: light when Claude Code's own theme is light. dark and light fix it. */
-  appearance: 'auto' | 'dark' | 'light'
-}
-
-/** The swamp thresholds the settings offer, in percent of the context window. */
-export const SWAMP_STEPS = [10, 20, 30, 40, 50, 60, 70, 80] as const
-
-/** The parts of effortless a person can switch off: the footer's handoff button, the cache timer and the judge's line.
- * The context (swamp), running-low (hot) and cold-cache alerts can be switched off for good in Customize; the judge-down
- * alert always shows. Each alert also has its own ✕. */
-export const HIDEABLE = ['handoff', 'timer', 'reason', 'swamp', 'hot', 'cold'] as const
-export type Hideable = (typeof HIDEABLE)[number]
-const JUDGE_TIMEOUT_MS = 4000
-const JUDGE_BUDGET_MS = 8000
-
 // What the app passed to register, so settings kept in the store can be laid over it at session start.
 let pluginOptions: Record<string, unknown> = {}
-let config: JudgeConfig = {
-  judge: 'auto',
-  typesafeKey: '',
-  decisionModels: [],
-  openrouterKey: '',
-  judgeTimeoutMs: JUDGE_TIMEOUT_MS,
-  judgeBudgetMs: JUDGE_BUDGET_MS,
-  handoffSkill: '',
-  handoffAfter: 'continue',
-  bias: 0,
-  floor: 'low',
-  ceiling: 'max',
-  hide: ['reason'],
-  swampAt: 70,
-  layout: 'default',
-  compactWith: 'haiku',
-  handoffButton: 'advised',
-  helpers: 'off',
-  theme: 'violet',
-  appearance: 'auto',
-}
-
-/** A setting in milliseconds: a positive whole number as typed, else undefined. */
-function validMs(s: string): number | undefined {
-  const n = Number(s)
-  return /^\d+$/.test(s) && n > 0 && Number.isSafeInteger(n) ? n : undefined
-}
-
-/** One line per judge timing the person set that is not a positive whole number, saying the default it falls back to. */
-export function timingWarnings(options: unknown): string[] {
-  const o = (options ?? {}) as Record<string, unknown>
-  return ([['judgeTimeoutMs', JUDGE_TIMEOUT_MS], ['judgeBudgetMs', JUDGE_BUDGET_MS]] as const).flatMap(([k, fallback]) => {
-    const v = typeof o[k] === 'string' ? (o[k] as string).trim() : ''
-    return v && validMs(v) === undefined ? [`${k} "${v}" is not a positive whole number of ms; using ${fallback}`] : []
-  })
-}
-
-/** The settings as the engine hands them over (defaults filled in), cleaned to the shape the judge reads. */
-export function readConfig(options: unknown): JudgeConfig {
-  const o = (options ?? {}) as Record<string, unknown>
-  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
-  const picked = str(o.judge)
-  return {
-    judge: picked === 'haiku' ? 'haiku' : 'auto',
-    typesafeKey: str(o.typesafeKey),
-    decisionModels: parseDecisionModels(str(o.decisionModels)),
-    openrouterKey: str(o.openrouterKey),
-    // Used as typed: network waits don't count toward the 10 s hook budget, so the budget is how long a prompt can be held.
-    judgeTimeoutMs: validMs(str(o.judgeTimeoutMs)) ?? JUDGE_TIMEOUT_MS,
-    judgeBudgetMs: validMs(str(o.judgeBudgetMs)) ?? JUDGE_BUDGET_MS,
-    handoffSkill: str(o.handoffSkill).replace(/^\//, ''),
-    handoffAfter: (['confirm', 'copy'] as const).find(a => a === str(o.handoffAfter)) ?? 'continue',
-    bias: Math.max(-2, Math.min(2, Math.round(Number(str(o.effortBias)) || 0))),
-    floor: EFFORTS.includes(str(o.effortFloor) as Effort) ? (str(o.effortFloor) as Effort) : 'low',
-    ceiling: EFFORTS.includes(str(o.effortCeiling) as Effort) ? (str(o.effortCeiling) as Effort) : 'max',
-    swampAt: SWAMP_STEPS.includes(Number(str(o.swampAt)) as (typeof SWAMP_STEPS)[number]) ? Number(str(o.swampAt)) : 70,
-    layout: str(o.layout) === 'minimal' ? 'minimal' : 'default',
-    compactWith: str(o.compactWith) === 'session' ? 'session' : 'haiku',
-    handoffButton: str(o.handoffButton) === 'always' ? 'always' : 'advised',
-    helpers: str(o.helpers) === 'on' ? 'on' : 'off',
-    theme: THEMES.find(t => t === str(o.theme)) ?? 'violet',
-    appearance: (['dark', 'light'] as const).find(a => a === str(o.appearance)) ?? 'auto',
-    // The judge's line is off until switched on; an empty string saved from the panel means everything shows.
-    hide: (o.hide === undefined ? 'reason' : str(o.hide))
-      .split(',')
-      .map(part => part.trim())
-      .filter((part): part is Hideable => (HIDEABLE as readonly string[]).includes(part)),
-  }
-}
 
 /** The text Haiku reads: the last turns and the next message. Not the model in use nor the effort in force: the verdict
  * answers for every model, and effortless applies the one that runs. */
@@ -1950,7 +1818,7 @@ async function saveSetting($: EngineInterface, field: keyof typeof SETTING_FIELD
     [SETTING_FIELDS[field]]: value,
   }
   // The keys are the app's secrets: never in raw, kept as they were.
-  config = { ...readConfig(raw), typesafeKey: config.typesafeKey, openrouterKey: config.openrouterKey }
+  setConfig({ ...readConfig(raw), typesafeKey: config.typesafeKey, openrouterKey: config.openrouterKey })
   await resettle($)
   applyTheme()
   $.ui.invalidate('ui.render')
@@ -3486,7 +3354,6 @@ async function agentWaits($: EngineInterface) {
 // chat model's price. Claude Code compacts with the chat's own model and has no setting for another, and the
 // summarizer's request does not pass through turn.step, so the mod answers session.compact itself: the transcript as
 // text, Haiku's summary back as the conversation. Anything that fails falls through to Claude Code's own compaction.
-const HAIKU_MODEL = 'claude-haiku-5-5'
 /** The transcript's most text sent to Haiku: about 600k tokens, inside its window with room for the summary. */
 const COMPACT_MAX_CHARS = 2_400_000
 const COMPACT_SYSTEM = `You compact a conversation between a user and Claude Code, an AI coding agent, so the work can continue
@@ -3568,7 +3435,7 @@ export const register: Register = (on, options) => {
   loadedAt = Date.now()
   firstDrawLogged = false
   drawsTimed = 0
-  config = readConfig(options)
+  setConfig(readConfig(options))
   applyTheme()
   pluginOptions = options
   on('session.compact', async ($, e, next) => {
@@ -3611,7 +3478,7 @@ export const register: Register = (on, options) => {
     setLoadedSession(String(sid).slice(0, 8))
     // Settings the app had no /config row for (see saveSetting), over the ones it passed in.
     if (kept && typeof kept === 'object' && Object.keys(kept).length) {
-      config = readConfig({ ...pluginOptions, ...kept })
+      setConfig(readConfig({ ...pluginOptions, ...kept }))
       applyTheme()
     }
     keyFromFile = kff === true
