@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { setupNext, setupBack, setupCounter, claudeCandidates, noClaudeHint } from '../hooks/register'
+import { setupNext, setupBack, setupCounter, claudeCandidates, noClaudeHint } from '../hooks/setup'
 import { dashboardLines, flashColor, handoffGlowStep, handoffLook, JUDGE_FADE_MS, JUDGE_PIECE_MS, JUDGE_RISE_MS, JUDGE_STEP_MS, judgeBrightnessAt, judgeGlowAt, judgeGlowSvg } from '../hooks/svgs'
 import { asSpent, savedText, weighted } from '../hooks/stats'
 import { hotVisible, tipped, bounded, capped, resetLabel, cacheColor, cacheLabel, cacheClock, cacheTtlOf, mostlyCached } from '../hooks/usage'
